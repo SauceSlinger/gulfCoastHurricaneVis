@@ -55,7 +55,7 @@ def validate_files():
         'tabbed_native_dashboard.py',
         'native_visualizations.py',
         'settings_manager.py',
-        'data_processor.py'
+        'data_processor_db.py'
     ]
     
     missing_files = []

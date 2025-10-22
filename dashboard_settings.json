@@ -1,0 +1,28 @@
+{
+  "timeline_show_trend": true,
+  "timeline_show_markers": true,
+  "timeline_line_style": "solid",
+  "timeline_color_scheme": "blue",
+  "timeline_y_scale": "linear",
+  "timeline_grid": true,
+  "map_show_coastline": true,
+  "map_track_width": 2.0,
+  "map_show_categories": true,
+  "map_show_markers": true,
+  "map_projection": "equirectangular",
+  "map_zoom_level": "auto",
+  "analysis_show_grid": true,
+  "analysis_color_scheme": "viridis",
+  "analysis_chart_types": {
+    "category_dist": "bar",
+    "intensity_trends": "line",
+    "monthly_activity": "bar",
+    "wind_distribution": "histogram"
+  },
+  "analysis_normalize_data": false,
+  "analysis_show_statistics": true,
+  "figure_dpi": 100,
+  "figure_style": "dark_background",
+  "auto_refresh": true,
+  "show_performance_stats": true
+}

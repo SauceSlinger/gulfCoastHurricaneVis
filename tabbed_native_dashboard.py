@@ -11,85 +11,131 @@ import time
 import psutil
 import numpy as np
 import pandas as pd
+import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable
 
 # Import components
 from native_visualizations import NativeVisualizationEngine
 from settings_manager import SettingsManager, create_settings_gear_button, VisualizationSettings
-from data_processor import HurricaneDataProcessor
+from aesthetic_theme import get_theme, AestheticTheme
+
+# Try database processor first, fallback to CSV processor
+try:
+    from data_processor_db import HurricaneDataProcessor
+    DATABASE_AVAILABLE = True
+except ImportError:
+    DATABASE_AVAILABLE = False
+
+if not DATABASE_AVAILABLE:
+    try:
+        from csv_data_processor import HurricaneDataProcessor
+    except ImportError:
+        # Final fallback - create a minimal processor
+        class HurricaneDataProcessor:
+            def __init__(self):
+                self.gulf_coast_data = pd.DataFrame()
+                self.full_atlantic_data = pd.DataFrame()
+            def get_storm_list(self, dataset="gulf_coast"):
+                return []
+            def get_storm_data(self, storm_name, dataset="gulf_coast"):
+                return pd.DataFrame()
+            def get_dataset_for_analysis(self, dataset="gulf_coast", year_range=None):
+                return pd.DataFrame()
 
 class TabbedNativeDashboard:
     """Enhanced native GUI dashboard with tabbed interface for maximum visualization space"""
     
-    def __init__(self, root: Optional[ctk.CTk] = None):
-        # Initialize root window if not provided
-        if root is None:
-            self.root = ctk.CTk()
-            self.root.title("🌀 Gulf Coast Hurricane Analysis Dashboard - Tabbed Interface")
-            self.root.geometry("1800x1000")
-            self.created_root = True
-        else:
-            self.root = root
-            self.created_root = False
+    def __init__(self, data_processor=None, loading_callback=None, log_callback=None):
+        """Initialize the dashboard with optional data processor, loading callback, and log callback"""
+        self.log_callback = log_callback
+        print("� Initializing TabbedNativeDashboard...")
         
-        # Initialize settings manager
-        self.settings_manager = SettingsManager()
-        
-        # Initialize components
-        self.data_processor = None
-        self.viz_engine = None
-        self.selected_storm = None
+        # Data
+        self.data_processor = data_processor
         self.storm_data = None
+        self.selected_storm = None
+        self.viz_engine = None
         
-        # Map filter variables
-        self.current_map_filters = {}
-        self.current_show_multiple = True
+        # Loading coordination
+        self.loading_callback = loading_callback
+        self.visualizations_ready = {
+            'overview': False,
+            'timeline': False,
+            'map': False,
+            'analysis': False
+        }
+        self.all_visualizations_complete = False
         
-        # UI components
-        self.main_frame = None
-        self.navbar_frame = None
-        self.tab_notebook = None
-        self.control_frame = None
-        self.status_frame = None
+        # UI Components
+        self.root = None
+        self.notebook = None
+        self.storm_selector = None
+        self.performance_label = None
+        self.progress_bar = None
         
-        # Tab frames
-        self.timeline_tab = None
-        self.map_tab = None
-        self.analysis_tab = None
-        self.overview_tab = None
+        # Visualization state
+        self.current_viz_data = None
         
-        # Visualization containers
-        self.timeline_viz_frame = None
-        self.map_viz_frame = None
-        self.analysis_viz_frame = None
-        self.overview_viz_frame = None
+        # Initialize essential components before setup_ui
+        self._initialize_core_components()
+        self.setup_ui()
         
+        # Initialize data components after UI is ready
+        self.initialize_components()
+    
+    def _log(self, message: str):
+        """Send log message to both console and loading window if callback exists"""
+        print(message)
+        if self.log_callback:
+            try:
+                self.log_callback(message)
+            except Exception as e:
+                print(f"⚠️ Log callback error: {e}")
+    
+    def _setup_logging(self):
+        """Setup logging for the dashboard"""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        return logging.getLogger(__name__)
+    
+    def _initialize_core_components(self):
+        """Initialize core components required for UI setup"""
         # Performance monitoring
+        self.monitoring_active = False
         self.performance_data = {
             'cpu_usage': [],
             'memory_usage': [],
-            'render_times': [],
             'timestamps': []
         }
-        self.monitoring_active = False
         
-        # Setup UI and initialize
-        self.setup_ui()
-        self.initialize_components()
+        # Initialize logging
+        self.logger = self._setup_logging()
         
-        # Register settings callbacks
-        self.register_settings_callbacks()
+        # Create root window
+        self.root = ctk.CTk()
+        self.root.title("🌀 Gulf Coast Hurricane Analysis Dashboard")
+        self.root.geometry("1400x900")
+        self.root.minsize(1200, 800)
+        self.created_root = True
+        
+        # Initialize theme and settings
+        self.theme = AestheticTheme()
+        self.settings_manager = SettingsManager()
+        
+        self._log("✅ Core components initialized")
     
     def setup_ui(self):
-        """Setup the tabbed user interface"""
-        # Configure root grid
-        self.root.grid_rowconfigure(1, weight=1)  # Main content area
+        """Setup the tabbed user interface with aesthetic theming"""
+        # Configure root grid - main content in row 0
+        self.root.grid_rowconfigure(0, weight=1)  # Main content area
         self.root.grid_columnconfigure(0, weight=1)
         
-        # Create main container
-        self.main_frame = ctk.CTkFrame(self.root)
-        self.main_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        # Create main container with minimal padding to maximize space
+        self.main_frame = self.theme.get_styled_frame(self.root, style="secondary")
+        self.main_frame.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
         
         # Configure main frame grid
         self.main_frame.grid_rowconfigure(1, weight=1)  # Tab notebook
@@ -98,86 +144,95 @@ class TabbedNativeDashboard:
         # Create components
         self.create_navbar()
         self.create_tabbed_interface()
-        self.create_control_panel()
-        self.create_status_panel()
+        # Create minimal progress bar for compatibility (no visible panel)
+        self.create_minimal_progress_bar()
+        # Skip control panel and status panel for minimal bottom space
+        
+        # Register settings callbacks after UI is created
+        self.register_settings_callbacks()
     
     def create_navbar(self):
         """Create top navigation bar with controls and title"""
-        self.navbar_frame = ctk.CTkFrame(self.main_frame, height=60)
-        self.navbar_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        self.navbar_frame = self.theme.get_styled_frame(
+            self.main_frame, 
+            style="card", 
+            height=self.theme.spacing.header_height
+        )
+        self.navbar_frame.grid(row=0, column=0, sticky="ew", 
+                              padx=2, 
+                              pady=(2, 1))
         self.navbar_frame.grid_propagate(False)
         
         # Configure navbar grid
         self.navbar_frame.grid_columnconfigure(1, weight=1)  # Title section expands
         
         # Left side - App title and info
-        title_frame = ctk.CTkFrame(self.navbar_frame)
-        title_frame.grid(row=0, column=0, sticky="w", padx=10, pady=5)
+        title_frame = self.theme.get_styled_frame(self.navbar_frame, style="transparent")
+        title_frame.grid(row=0, column=0, sticky="w", padx=self.theme.spacing.md, pady=self.theme.spacing.sm)
         
-        app_title = ctk.CTkLabel(
+        app_title = self.theme.get_styled_label(
             title_frame,
             text="🌀 Hurricane Analysis Dashboard",
-            font=ctk.CTkFont(size=20, weight="bold")
+            style="title"
         )
-        app_title.pack(side="left", padx=10, pady=10)
+        app_title.pack(side="left", padx=self.theme.spacing.md, pady=self.theme.spacing.md)
         
         # Center - Storm selector
-        selector_frame = ctk.CTkFrame(self.navbar_frame)
-        selector_frame.grid(row=0, column=1, sticky="ew", padx=20, pady=5)
+        selector_frame = self.theme.get_styled_frame(self.navbar_frame, style="transparent")
+        selector_frame.grid(row=0, column=1, sticky="ew", padx=self.theme.spacing.lg, pady=self.theme.spacing.sm)
         selector_frame.grid_columnconfigure(2, weight=1)
         
         # Storm search
-        search_label = ctk.CTkLabel(selector_frame, text="🔍 Search:")
-        search_label.grid(row=0, column=0, padx=5, pady=10)
+        search_label = self.theme.get_styled_label(selector_frame, text="🔍 Search:", style="body")
+        search_label.grid(row=0, column=0, padx=self.theme.spacing.sm, pady=self.theme.spacing.md)
         
         self.search_var = tk.StringVar()
         self.search_var.trace('w', self.filter_storms)
-        self.search_entry = ctk.CTkEntry(
+        self.search_entry = self.theme.get_styled_entry(
             selector_frame,
-            textvariable=self.search_var,
-            placeholder_text="Enter storm name...",
+            placeholder="Enter storm name...",
             width=200
         )
-        self.search_entry.grid(row=0, column=1, padx=5, pady=10)
+        self.search_entry.configure(textvariable=self.search_var)
+        self.search_entry.grid(row=0, column=1, padx=self.theme.spacing.sm, pady=self.theme.spacing.md)
         
         # Storm dropdown
-        storm_label = ctk.CTkLabel(selector_frame, text="🌀 Storm:")
-        storm_label.grid(row=0, column=2, padx=(20, 5), pady=10)
+        storm_label = self.theme.get_styled_label(selector_frame, text="🌀 Storm:", style="body")
+        storm_label.grid(row=0, column=2, padx=(self.theme.spacing.lg, self.theme.spacing.sm), pady=self.theme.spacing.md)
         
         self.storm_var = tk.StringVar()
-        self.storm_selector = ctk.CTkComboBox(
+        self.storm_selector = self.theme.get_styled_combobox(
             selector_frame,
-            variable=self.storm_var,
-            command=self.on_storm_selected,
-            state="readonly",
+            values=[],
             width=250
         )
-        self.storm_selector.grid(row=0, column=3, padx=5, pady=10)
+        self.storm_selector.configure(variable=self.storm_var, command=self.on_storm_selected, state="readonly")
+        self.storm_selector.grid(row=0, column=3, padx=self.theme.spacing.sm, pady=self.theme.spacing.md)
         
         # Right side - Action buttons
-        buttons_frame = ctk.CTkFrame(self.navbar_frame)
-        buttons_frame.grid(row=0, column=2, sticky="e", padx=10, pady=5)
+        buttons_frame = self.theme.get_styled_frame(self.navbar_frame, style="transparent")
+        buttons_frame.grid(row=0, column=2, sticky="e", padx=self.theme.spacing.md, pady=self.theme.spacing.sm)
         
         # Load data button
-        self.load_btn = ctk.CTkButton(
+        self.load_btn = self.theme.get_styled_button(
             buttons_frame,
             text="📂 Load Data",
             command=self.load_hurricane_data,
-            height=35,
+            style="primary",
             width=100
         )
-        self.load_btn.pack(side="left", padx=5, pady=10)
+        self.load_btn.pack(side="left", padx=self.theme.spacing.sm, pady=self.theme.spacing.md)
         
         # Refresh button
-        self.refresh_btn = ctk.CTkButton(
+        self.refresh_btn = self.theme.get_styled_button(
             buttons_frame,
             text="🔄 Refresh",
             command=self.refresh_all_visualizations,
-            height=35,
-            width=100,
-            state="disabled"
+            style="secondary",
+            width=100
         )
-        self.refresh_btn.pack(side="left", padx=5, pady=10)
+        self.refresh_btn.configure(state="disabled")
+        self.refresh_btn.pack(side="left", padx=self.theme.spacing.sm, pady=self.theme.spacing.md)
         
         # Export button
         self.export_btn = ctk.CTkButton(
@@ -192,9 +247,9 @@ class TabbedNativeDashboard:
     
     def create_tabbed_interface(self):
         """Create main tabbed interface for visualizations"""
-        # Create notebook with larger tabs
-        self.tab_notebook = ctk.CTkTabview(self.main_frame, height=700)
-        self.tab_notebook.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+        # Create notebook with minimal padding to maximize space usage
+        self.tab_notebook = ctk.CTkTabview(self.main_frame)
+        self.tab_notebook.grid(row=1, column=0, sticky="nsew", padx=2, pady=(2, 0))
         
         # Add tabs
         self.overview_tab = self.tab_notebook.add("📊 Overview")
@@ -207,6 +262,32 @@ class TabbedNativeDashboard:
         self.setup_timeline_tab()
         self.setup_map_tab()
         self.setup_analysis_tab()
+        
+        # Add minimal bottom border frame for visual consistency
+        self.create_bottom_border()
+    
+    def create_bottom_border(self):
+        """Create minimal bottom border frame - nearly flush with window bottom"""
+        self.bottom_border_frame = self.theme.get_styled_frame(self.main_frame, style="transparent")
+        self.bottom_border_frame.grid(row=2, column=0, sticky="ew", padx=0, pady=0)
+        self.bottom_border_frame.configure(height=2)  # Minimal 2-pixel bottom border
+        self.bottom_border_frame.grid_propagate(False)  # Maintain fixed height
+    
+    def create_minimal_progress_bar(self):
+        """Create a hidden progress bar for compatibility without taking visual space"""
+        # Create a minimal frame that's essentially invisible
+        hidden_frame = ctk.CTkFrame(self.main_frame, height=1)
+        hidden_frame.grid(row=3, column=0, sticky="ew")
+        hidden_frame.grid_remove()  # Hide it immediately
+        
+        # Create progress bar in hidden frame for code compatibility
+        self.progress_bar = ctk.CTkProgressBar(hidden_frame, width=1, height=1)
+        self.progress_bar.pack()
+        self.progress_bar.set(0)
+        
+        # Create minimal performance label for code compatibility  
+        self.performance_label = ctk.CTkLabel(hidden_frame, text="Ready", font=ctk.CTkFont(size=1))
+        self.performance_label.pack()
     
     def setup_overview_tab(self):
         """Setup overview tab with dashboard summary"""
@@ -233,7 +314,7 @@ class TabbedNativeDashboard:
         )
         overview_gear.grid(row=0, column=2, sticky="e", padx=15, pady=10)
         
-        # Large visualization container
+        # Large visualization container - expanded to fill space above 15px bottom border
         self.overview_viz_frame = ctk.CTkFrame(self.overview_tab)
         self.overview_viz_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         
@@ -266,7 +347,7 @@ class TabbedNativeDashboard:
         )
         timeline_gear.grid(row=0, column=2, sticky="e", padx=15, pady=10)
         
-        # Full-size visualization container
+        # Full-size visualization container - expanded to fill space above 15px bottom border
         self.timeline_viz_frame = ctk.CTkFrame(self.timeline_tab)
         self.timeline_viz_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         
@@ -280,9 +361,9 @@ class TabbedNativeDashboard:
         self.map_tab.grid_rowconfigure(2, weight=1)  # Visualization area
         self.map_tab.grid_columnconfigure(0, weight=1)
         
-        # Compact header with title and settings
+        # Ultra-compact header with title and settings  
         header_frame = ctk.CTkFrame(self.map_tab)
-        header_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=3)
+        header_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=(2, 0))
         header_frame.grid_columnconfigure(1, weight=1)
         
         title_label = ctk.CTkLabel(
@@ -290,21 +371,21 @@ class TabbedNativeDashboard:
             text="🗺️ Regional Storm Track Visualization & Geographic Analysis",
             font=ctk.CTkFont(size=16, weight="bold")
         )
-        title_label.grid(row=0, column=0, sticky="w", padx=10, pady=5)
+        title_label.grid(row=0, column=0, sticky="w", padx=10, pady=(3, 1))
         
         map_gear = create_settings_gear_button(
             header_frame,
             self.settings_manager,
             "map"
         )
-        map_gear.grid(row=0, column=2, sticky="e", padx=10, pady=5)
+        map_gear.grid(row=0, column=2, sticky="e", padx=10, pady=(3, 1))
         
         # Map filtering controls
         self.create_map_filters()
         
-        # Maximum-size visualization container
+        # Maximum-size visualization container - expanded to fill space above 15px bottom border
         self.map_viz_frame = ctk.CTkFrame(self.map_tab)
-        self.map_viz_frame.grid(row=2, column=0, sticky="nsew", padx=5, pady=(0, 5))
+        self.map_viz_frame.grid(row=2, column=0, sticky="nsew", padx=5, pady=(0, 10))
         
         # Configure for large matplotlib canvas
         self.map_viz_frame.grid_rowconfigure(0, weight=1)
@@ -335,7 +416,7 @@ class TabbedNativeDashboard:
         )
         analysis_gear.grid(row=0, column=2, sticky="e", padx=15, pady=10)
         
-        # Full-size visualization container for multi-panel analysis
+        # Full-size visualization container for multi-panel analysis - expanded to fill space above 15px bottom border
         self.analysis_viz_frame = ctk.CTkFrame(self.analysis_tab)
         self.analysis_viz_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         
@@ -405,12 +486,28 @@ class TabbedNativeDashboard:
             self.update_overview_visualization()
     
     def initialize_components(self):
-        """Initialize data processor and visualization engine"""
+        """Initialize data processor and visualization engine with database fallback"""
         try:
-            print("🔧 Initializing tabbed dashboard components...")
+            self._log("🔧 Initializing tabbed dashboard components...")
             
-            # Initialize data processor
-            self.data_processor = HurricaneDataProcessor()
+            # Try to initialize data processor (with database fallback)
+            try:
+                if DATABASE_AVAILABLE:
+                    self._log("📊 Attempting database connection...")
+                    self.data_processor = HurricaneDataProcessor()
+                    self._log("✅ Database processor initialized")
+                else:
+                    self._log("📄 Using CSV fallback processor...")
+                    self.data_processor = HurricaneDataProcessor()
+                    self._log("✅ CSV processor initialized")
+            except Exception as db_error:
+                self._log(f"⚠️ Database connection failed: {db_error}")
+                self._log("📄 Falling back to CSV processor...")
+                
+                # Import and use CSV processor as fallback
+                from csv_data_processor import HurricaneDataProcessor as CsvProcessor
+                self.data_processor = CsvProcessor()
+                self._log("✅ CSV fallback processor initialized")
             
             # Initialize visualization engine with settings
             self.viz_engine = NativeVisualizationEngine(
@@ -418,20 +515,60 @@ class TabbedNativeDashboard:
                 settings=self.settings_manager.settings
             )
             
-            print("✅ Tabbed dashboard components initialized")
+            self._log("✅ Native visualization engine initialized with matplotlib TkAgg backend")
+            self._log("✅ Tabbed dashboard components initialized")
             
             # Auto-load data if available
             self.auto_load_data()
             
         except Exception as e:
             print(f"❌ Failed to initialize components: {e}")
-            messagebox.showerror("Initialization Error", f"Failed to initialize dashboard: {e}")
+            self.logger.error(f"Component initialization failed: {e}", exc_info=True)
+            
+            # Show warning but don't exit - allow user to load data manually
+            response = messagebox.askyesno(
+                "Initialization Warning", 
+                f"Failed to initialize dashboard components: {e}\n\n"
+                f"Continue with limited functionality?",
+                icon="warning"
+            )
+            
+            if not response:
+                self.root.quit()
+                return
+            
+            # Create minimal fallback components
+            self._create_fallback_components()
+    
+    def _create_fallback_components(self):
+        """Create minimal fallback components when initialization fails"""
+        try:
+            print("🔧 Creating fallback components...")
+            
+            # Create minimal data processor
+            if not hasattr(self, 'data_processor') or self.data_processor is None:
+                from csv_data_processor import HurricaneDataProcessor as CsvProcessor
+                self.data_processor = CsvProcessor()
+            
+            # Create minimal visualization engine
+            if not hasattr(self, 'viz_engine') or self.viz_engine is None:
+                self.viz_engine = NativeVisualizationEngine(
+                    parent_widget=self.root,
+                    settings=self.settings_manager.settings
+                )
+            
+            print("✅ Fallback components created")
+            
+        except Exception as e:
+            print(f"⚠️ Could not create fallback components: {e}")
+            self.data_processor = None
+            self.viz_engine = None
     
     def auto_load_data(self):
         """Auto-load data during initialization"""
         def auto_load_thread():
             try:
-                print("📊 Auto-loading hurricane data...")
+                self._log("📊 Auto-loading hurricane data...")
                 self.root.after(0, lambda: self.performance_label.configure(
                     text="📊 Loading hurricane data..."
                 ))
@@ -440,10 +577,10 @@ class TabbedNativeDashboard:
                 # Use already loaded data from data processor initialization
                 if hasattr(self.data_processor, 'gulf_coast_data') and self.data_processor.gulf_coast_data is not None:
                     self.storm_data = self.data_processor.gulf_coast_data
-                    print(f"📊 Using pre-loaded Gulf Coast data: {len(self.storm_data)} records")
+                    self._log(f"📊 Using pre-loaded Gulf Coast data: {len(self.storm_data)} records")
                 elif hasattr(self.data_processor, 'processed_data') and self.data_processor.processed_data is not None:
                     self.storm_data = self.data_processor.processed_data
-                    print(f"📊 Using pre-loaded processed data: {len(self.storm_data)} records")
+                    self._log(f"📊 Using pre-loaded processed data: {len(self.storm_data)} records")
                 else:
                     # Fallback: try to load data manually
                     success = self.data_processor.load_data("storms.csv")
@@ -470,7 +607,7 @@ class TabbedNativeDashboard:
                         text=f"✅ Loaded {len(self.storm_data)} hurricane records - Ready for analysis"
                     ))
                     
-                    print(f"✅ Auto-loaded {len(self.storm_data)} hurricane records")
+                    self._log(f"✅ Auto-loaded {len(self.storm_data)} hurricane records")
                 else:
                     self.root.after(0, lambda: self.performance_label.configure(
                         text="⚠️ No data available - use Load Data button"
@@ -548,7 +685,7 @@ class TabbedNativeDashboard:
                     self.storm_selector.set(first_storm)
                     self.selected_storm = first_storm
                     
-                    print(f"🌀 Auto-selected storm: {first_storm}")
+                    self._log(f"🌀 Auto-selected storm: {first_storm}")
                     
                     # Update all visualizations
                     self.update_all_visualizations()
@@ -615,9 +752,9 @@ class TabbedNativeDashboard:
                     chart_type="multi",
                     settings=self.settings_manager.settings
                 )
-                print("✅ Overview visualization updated")
+                self._log("✅ Overview visualization updated")
         except Exception as e:
-            print(f"⚠️ Overview update error: {e}")
+            self._log(f"⚠️ Overview update error: {e}")
     
     def update_timeline_visualization(self):
         """Update timeline visualization with current settings"""
@@ -633,9 +770,9 @@ class TabbedNativeDashboard:
                 title=f"Timeline Analysis: {self.selected_storm}",
                 settings=self.settings_manager.settings
             )
-            print("✅ Timeline visualization updated")
+            self._log("✅ Timeline visualization updated")
         except Exception as e:
-            print(f"⚠️ Timeline update error: {e}")
+            self._log(f"⚠️ Timeline update error: {e}")
     
     def update_map_visualization(self):
         """Update the map visualization with current filters"""
@@ -648,21 +785,22 @@ class TabbedNativeDashboard:
                 widget.destroy()
             
             # Generate updated map with filters
-            map_canvas = self.viz_engine.generate_map_visualization(
+            map_result = self.viz_engine.generate_map_visualization(
                 self.storm_data,
                 self.map_viz_frame,
                 show_multiple_tracks=getattr(self, 'current_show_multiple', True),
                 filter_options=getattr(self, 'current_map_filters', {})
             )
             
-            if map_canvas:
-                # Place the canvas in the frame
-                map_canvas.grid(row=0, column=0, sticky="nsew")
+            if map_result and isinstance(map_result, dict) and 'canvas' in map_result:
+                # Extract canvas from result dictionary and place it using get_tk_widget()
+                map_canvas = map_result['canvas']
+                map_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
                 
-                print(f"🗺️ Map visualization updated with filters: {getattr(self, 'current_map_filters', {})}")
+                self._log(f"🗺️ Map visualization updated with filters: {getattr(self, 'current_map_filters', {})}")
             
         except Exception as e:
-            print(f"⚠️ Map update error: {e}")
+            self._log(f"⚠️ Map update error: {e}")
             import traceback
             traceback.print_exc()
     
@@ -678,13 +816,55 @@ class TabbedNativeDashboard:
                     chart_type="multi_panel",
                     settings=self.settings_manager.settings
                 )
-                print("✅ Analysis visualization updated")
+                self._log("✅ Analysis visualization updated")
         except Exception as e:
-            print(f"⚠️ Analysis update error: {e}")
+            self._log(f"⚠️ Analysis update error: {e}")
+    
+    # Callback versions that mark visualizations as complete
+    def update_overview_visualization_with_callback(self):
+        """Update overview visualization and mark as complete"""
+        self.update_overview_visualization()
+        self.mark_visualization_complete('overview')
+    
+    def update_timeline_visualization_with_callback(self):
+        """Update timeline visualization and mark as complete"""
+        self.update_timeline_visualization()
+        self.mark_visualization_complete('timeline')
+    
+    def update_map_visualization_with_callback(self):
+        """Update map visualization and mark as complete"""
+        self.update_map_visualization()
+        self.mark_visualization_complete('map')
+    
+    def update_analysis_visualization_with_callback(self):
+        """Update analysis visualization and mark as complete"""
+        self.update_analysis_visualization()
+        self.mark_visualization_complete('analysis')
+    
+    def check_all_visualizations_complete(self):
+        """Check if all visualizations are complete and trigger callback if so"""
+        if all(self.visualizations_ready.values()) and not self.all_visualizations_complete:
+            self.all_visualizations_complete = True
+            self._log("✅ All visualizations are now complete!")
+            
+            if self.loading_callback:
+                self.loading_callback()
+                self._log("📞 Loading callback triggered")
+    
+    def mark_visualization_complete(self, viz_name):
+        """Mark a specific visualization as complete"""
+        if viz_name in self.visualizations_ready:
+            self.visualizations_ready[viz_name] = True
+            self._log(f"✅ {viz_name.capitalize()} visualization complete")
+            self.check_all_visualizations_complete()
     
     def update_all_visualizations(self):
         """Update all visualizations"""
-        print("🔄 Updating tabbed visualizations...")
+        self._log("🔄 Updating tabbed visualizations...")
+        
+        # Reset completion status
+        self.visualizations_ready = {key: False for key in self.visualizations_ready}
+        self.all_visualizations_complete = False
         
         def update_thread():
             try:
@@ -692,20 +872,17 @@ class TabbedNativeDashboard:
                     text="🔄 Updating visualizations..."
                 ))
                 
-                # Update all tabs
-                self.root.after(0, self.update_overview_visualization)
-                self.root.after(0, self.update_timeline_visualization)
-                self.root.after(0, self.update_map_visualization)  
-                self.root.after(0, self.update_analysis_visualization)
-                
-                self.root.after(0, lambda: self.performance_label.configure(
-                    text="✅ All visualizations updated"
-                ))
+                # Update all tabs with completion tracking
+                self.root.after(0, lambda: self.update_overview_visualization_with_callback())
+                self.root.after(0, lambda: self.update_timeline_visualization_with_callback())
+                self.root.after(0, lambda: self.update_map_visualization_with_callback())  
+                self.root.after(0, lambda: self.update_analysis_visualization_with_callback())
                 
             except Exception as e:
                 self.root.after(0, lambda: self.performance_label.configure(
                     text=f"❌ Update failed: {e}"
                 ))
+                print(f"❌ Visualization update error: {e}")
         
         threading.Thread(target=update_thread, daemon=True).start()
     
@@ -843,9 +1020,11 @@ class TabbedNativeDashboard:
     
     def create_map_filters(self):
         """Create compact filtering controls for the map visualization"""
-        # Compact filter controls frame
-        filter_frame = ctk.CTkFrame(self.map_tab)
-        filter_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=2)
+        # Ultra-compact filter controls frame
+        filter_frame = self.theme.get_styled_frame(self.map_tab, style="card")
+        filter_frame.grid(row=1, column=0, sticky="ew", 
+                         padx=5, 
+                         pady=(0, 1))
         
         # Configure grid for filter sections
         filter_frame.grid_columnconfigure(0, weight=1)
@@ -854,22 +1033,26 @@ class TabbedNativeDashboard:
         filter_frame.grid_columnconfigure(3, weight=1)
         
         # Year range filtering
-        year_frame = ctk.CTkFrame(filter_frame)
-        year_frame.grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+        year_frame = self.theme.get_styled_frame(filter_frame, style="primary")
+        year_frame.grid(row=0, column=0, sticky="ew", 
+                       padx=2, 
+                       pady=2)
         
-        ctk.CTkLabel(year_frame, text="📅 Year Range", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=2)
+        self.theme.get_styled_label(year_frame, text="📅 Year Range", style="subheader").pack(pady=1)
         
-        year_controls = ctk.CTkFrame(year_frame)
-        year_controls.pack(fill="x", padx=3, pady=1)
+        year_controls = self.theme.get_styled_frame(year_frame, style="transparent")
+        year_controls.pack(fill="x", padx=2, pady=1)
         
-        ctk.CTkLabel(year_controls, text="From:").pack(side="left", padx=2)
+        self.theme.get_styled_label(year_controls, text="From:", style="caption").pack(side="left", padx=2)
         self.year_start_var = tk.StringVar(value="1975")
-        self.year_start_entry = ctk.CTkEntry(year_controls, textvariable=self.year_start_var, width=60)
+        self.year_start_entry = self.theme.get_styled_entry(year_controls, width=60)
+        self.year_start_entry.configure(textvariable=self.year_start_var)
         self.year_start_entry.pack(side="left", padx=2)
         
-        ctk.CTkLabel(year_controls, text="To:").pack(side="left", padx=2)
+        self.theme.get_styled_label(year_controls, text="To:", style="caption").pack(side="left", padx=2)
         self.year_end_var = tk.StringVar(value="2025")
-        self.year_end_entry = ctk.CTkEntry(year_controls, textvariable=self.year_end_var, width=60)
+        self.year_end_entry = self.theme.get_styled_entry(year_controls, width=60)
+        self.year_end_entry.configure(textvariable=self.year_end_var)
         self.year_end_entry.pack(side="left", padx=2)
         
         # Category filtering
@@ -886,7 +1069,14 @@ class TabbedNativeDashboard:
         
         for i, category in enumerate(categories):
             self.category_vars[category] = tk.BooleanVar(value=True)
-            checkbox = ctk.CTkCheckBox(cat_controls, text=f"Cat {i+1}" if "Category" in category else "TS",
+            # Fix the numbering - extract actual category number or use TS for Tropical Storm
+            if "Category" in category:
+                cat_num = category.split()[-1]  # Extract "1", "2", etc. from "Category 1", "Category 2"
+                display_text = f"Cat {cat_num}"
+            else:
+                display_text = "TS"
+            
+            checkbox = ctk.CTkCheckBox(cat_controls, text=display_text,
                                      variable=self.category_vars[category], width=50)
             checkbox.pack(side="left", padx=1)
         
@@ -1000,7 +1190,7 @@ class TabbedNativeDashboard:
     def run(self):
         """Run the tabbed dashboard"""
         try:
-            print("🚀 Starting Tabbed Native Hurricane Dashboard...")
+            self._log("🚀 Starting Tabbed Native Hurricane Dashboard...")
             
             # Start performance monitoring
             self.start_monitoring()

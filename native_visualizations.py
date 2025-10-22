@@ -1,6 +1,6 @@
 """
 Native GUI Visualizations for Hurricane Dashboard
-High-performance matplotlib-based visualizations with native GUI integration
+High-performance matplotlib-based visualizations with native GUI integration and aesthetic theming
 """
 
 import matplotlib
@@ -24,6 +24,7 @@ from dataclasses import dataclass
 # Import settings system
 try:
     from settings_manager import VisualizationSettings
+    from aesthetic_theme import get_theme, AestheticTheme
 except ImportError:
     # Fallback if settings not available
     @dataclass
@@ -32,21 +33,36 @@ except ImportError:
         figure_style: str = 'dark_background'
 
 # Configure matplotlib for better performance and appearance
-def configure_matplotlib(settings: Optional[VisualizationSettings] = None):
-    """Configure matplotlib based on settings"""
+def configure_matplotlib(settings: Optional[VisualizationSettings] = None, theme=None):
+    """Configure matplotlib based on settings and theme"""
     if settings is None:
         settings = VisualizationSettings()
     
     plt.style.use(settings.figure_style)
-    matplotlib.rcParams['figure.facecolor'] = '#2b2b2b'
-    matplotlib.rcParams['axes.facecolor'] = '#2b2b2b'
-    matplotlib.rcParams['savefig.facecolor'] = '#2b2b2b'
+    
+    # Use theme colors if available
+    chart_bg = theme.colors.chart_bg if theme else '#2b2b2b'
+    matplotlib.rcParams['figure.facecolor'] = chart_bg
+    matplotlib.rcParams['axes.facecolor'] = chart_bg
+    matplotlib.rcParams['savefig.facecolor'] = chart_bg
     matplotlib.rcParams['font.size'] = 10
     matplotlib.rcParams['axes.titlesize'] = 12
     matplotlib.rcParams['axes.labelsize'] = 10
     matplotlib.rcParams['xtick.labelsize'] = 9
     matplotlib.rcParams['ytick.labelsize'] = 9
     matplotlib.rcParams['figure.dpi'] = settings.figure_dpi
+    
+    # Configure layout settings for optimal compatibility
+    matplotlib.rcParams['figure.autolayout'] = False  # Disable automatic layout
+    matplotlib.rcParams['figure.constrained_layout.use'] = False  # Use manual layout control
+    
+    # Set default layout to 'none' for manual control (compatible with all matplotlib versions)
+    if hasattr(matplotlib, 'get_backend'):
+        # Suppress layout-related warnings for better user experience  
+        import warnings
+        warnings.filterwarnings('ignore', message='This figure includes Axes that are not compatible with tight_layout')
+        warnings.filterwarnings('ignore', message="The Figure parameters 'tight_layout' and 'constrained_layout' cannot be used together")
+        warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib.figure')
 
 # Initial configuration
 configure_matplotlib()
@@ -68,13 +84,20 @@ class NativeVisualizationEngine:
     """High-performance native GUI visualization engine using matplotlib"""
     
     def __init__(self, parent_widget=None, settings: Optional[VisualizationSettings] = None):
-        """Initialize the visualization engine"""
+        """Initialize the visualization engine with aesthetic theming"""
         self.parent_widget = parent_widget
         self.settings = settings or VisualizationSettings()
         self.config = PlotConfig(dpi=self.settings.figure_dpi)
         
-        # Configure matplotlib with current settings
-        configure_matplotlib(self.settings)
+        # Initialize aesthetic theme
+        try:
+            self.theme = get_theme()
+        except:
+            # Fallback if theme not available
+            self.theme = None
+        
+        # Configure matplotlib with current settings and theme
+        configure_matplotlib(self.settings, self.theme)
         
         # Active figures and canvases
         self.active_figures: Dict[str, Figure] = {}
@@ -97,32 +120,62 @@ class NativeVisualizationEngine:
                              width: int = None, height: int = None) -> Tuple[Figure, FigureCanvasTkAgg]:
         """Create an embedded matplotlib canvas widget in tkinter frame"""
         
-        # Use much larger dimensions for tabbed interface
-        # Check if this is being called for a large tabbed visualization or map
-        if plot_type == "map":  # Map visualizations get maximum space
-            min_width = 14   # inches - largest for regional maps
-            min_height = 10  # inches
+        # Get actual available space from parent frame with retry for proper sizing
+        parent_frame.update_idletasks()  # Ensure frame is rendered
+        available_width = parent_frame.winfo_width()
+        available_height = parent_frame.winfo_height()
+        
+        # If frame hasn't been sized yet, try to get dimensions from parent hierarchy
+        if available_width <= 1 or available_height <= 1:
+            # Try to get size from tab notebook or main window
+            current_widget = parent_frame
+            for _ in range(3):  # Check up to 3 levels up
+                current_widget = current_widget.master
+                if current_widget:
+                    test_width = current_widget.winfo_width()
+                    test_height = current_widget.winfo_height()
+                    if test_width > 100 and test_height > 100:
+                        # Use parent size with reasonable deduction for borders/tabs
+                        available_width = test_width - 50  # Account for padding/borders
+                        available_height = test_height - 150  # Account for tabs/headers
+                        break
+        
+        # Final fallbacks based on plot type if still no good dimensions
+        if available_width <= 1:
+            available_width = 1400 if plot_type == "map" else 1200
+        if available_height <= 1:  
+            available_height = 800 if plot_type == "map" else 600
+        
+        # Use responsive sizing based on available space with appropriate margins
+        if plot_type == "map":  # Map visualizations need to fit available space
+            # Use most of available space but leave room for frame borders and scrollbars
+            pixel_width = max(600, int(available_width * 0.92))   # 92% width, at least 600px 
+            pixel_height = max(400, int(available_height * 0.82)) # 82% height, leave room for margins
         elif width and width > 1000:  # Large tab interface
-            min_width = 12  # inches - much larger for full-screen tabs
-            min_height = 8   # inches
+            pixel_width = max(700, int(available_width * 0.90))
+            pixel_height = max(500, int(available_height * 0.80))
         else:  # Regular embedded view
-            min_width = 8   # inches
-            min_height = 6  # inches
+            pixel_width = max(500, int(available_width * 0.85))
+            pixel_height = max(350, int(available_height * 0.75))
         
-        fig_width = max(min_width, (width or self.config.width * 1.5) / self.config.dpi)
-        fig_height = max(min_height, (height or self.config.height * 1.5) / self.config.dpi)
+        # Convert pixels to inches using DPI
+        fig_width = pixel_width / self.config.dpi
+        fig_height = pixel_height / self.config.dpi
         
-        # Create figure with manual layout to avoid layout warnings
+        # Create figure with manual layout and themed styling
+        facecolor = self.theme.colors.chart_bg if self.theme else '#2b2b2b'
         fig = Figure(figsize=(fig_width, fig_height), 
                     dpi=self.config.dpi,
-                    facecolor='#2b2b2b')
+                    facecolor=facecolor,
+                    layout='none')  # Use explicit 'none' layout for full manual control
         
-        # Set optimized margins based on plot type
+        # Set optimized margins based on plot type with manual layout control
         if plot_type == "map":
-            # Minimal margins for maps to maximize geographic display
-            fig.subplots_adjust(left=0.05, bottom=0.05, right=0.98, top=0.95, wspace=0.2, hspace=0.3)
+            # Optimized layout for geographic visualizations - balanced margins for proper aspect ratio
+            # Leave more room for axis labels while maintaining good proportions
+            fig.subplots_adjust(left=0.08, bottom=0.12, right=0.96, top=0.88, wspace=0.1, hspace=0.1)
         else:
-            # Standard margins for other visualizations
+            # Standard margins for timeline and analysis visualizations
             fig.subplots_adjust(left=0.1, bottom=0.1, right=0.95, top=0.9, wspace=0.2, hspace=0.3)
         
         # Create canvas widget - use grid to match parent frame management
@@ -154,6 +207,19 @@ class NativeVisualizationEngine:
         canvas.mpl_connect('scroll_event', on_scroll)
         
         return fig, canvas
+    
+    def _apply_theme_to_axes(self, ax, apply_grid: bool = True):
+        """Apply theme styling to matplotlib axes"""
+        if self.theme:
+            # Use theme's apply_chart_styling method
+            # Note: We need to get the figure from the axes
+            fig = ax.get_figure()
+            self.theme.apply_chart_styling(fig, ax)
+        else:
+            # Fallback styling for when no theme is available
+            ax.set_facecolor('#2b2b2b')
+            if apply_grid:
+                ax.grid(True, alpha=0.3, color='gray')
     
     def _apply_map_filters(self, data: pd.DataFrame, filter_options: Dict) -> pd.DataFrame:
         """Apply filtering options to storm data for map visualization"""
@@ -354,7 +420,9 @@ class NativeVisualizationEngine:
                 if is_highlighted:
                     ax.text(lons[len(lons)//2], lats[len(lats)//2], 
                            f"{storm_name}\n{year}", fontsize=9, fontweight='bold',
-                           bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8),
+                           bbox=dict(boxstyle="round,pad=0.3", 
+                                    facecolor=self.theme.colors.surface if self.theme else 'white', 
+                                    alpha=0.8),
                            ha='center', va='center', zorder=15)
             
             track_count += 1
@@ -465,7 +533,10 @@ class NativeVisualizationEngine:
         ax.set_aspect('equal', adjustable='box')
         
         # Style the plot area
-        ax.set_facecolor('#f0f8ff')  # Light blue background (ocean color)
+        ocean_color = '#f0f8ff'  # Default ocean color
+        if self.theme:
+            ocean_color = self.theme.colors.map_ocean_bg if hasattr(self.theme.colors, 'map_ocean_bg') else '#f0f8ff'
+        ax.set_facecolor(ocean_color)
     
     def _add_map_legend(self, ax, data: pd.DataFrame):
         """Add legend and information to the map"""
@@ -512,58 +583,47 @@ class NativeVisualizationEngine:
     
     def generate_timeline_visualization(self, data: pd.DataFrame, 
                                       parent_frame, selected_storms: List[str] = None) -> Dict[str, Any]:
-        """Generate native timeline visualization with matplotlib"""
+        """Generate enhanced timeline visualization with 4 data stories using different chart types"""
         import time
         start_time = time.time()
         
         if data.empty:
             return self._create_empty_plot(parent_frame, "timeline", "No data available for timeline")
         
-        # Create embedded canvas
+        # Create embedded canvas with larger size for multi-panel layout
         fig, canvas = self.create_embedded_canvas(parent_frame, "timeline")
         
         # Clear any existing plots
         fig.clear()
         
-        # Create subplot
-        ax = fig.add_subplot(111)
+        # Create 2x2 subplot grid for 4 different data stories
+        gs = fig.add_gridspec(2, 2, hspace=0.35, wspace=0.25, 
+                             left=0.08, right=0.95, top=0.93, bottom=0.08)
         
-        # Process data for timeline
-        yearly_data = self._process_timeline_data(data)
+        # Story 1: Annual Storm Activity Timeline (Top Left) - Line Chart
+        ax1 = fig.add_subplot(gs[0, 0])
+        self._apply_theme_to_axes(ax1, apply_grid=True)
+        self._create_annual_activity_story(ax1, data, selected_storms)
         
-        # Main timeline plot
-        years = yearly_data['year'].values
-        counts = yearly_data['storm_count'].values
+        # Story 2: Seasonal Distribution Pattern (Top Right) - Polar/Circular Chart
+        ax2 = fig.add_subplot(gs[0, 1])
+        self._apply_theme_to_axes(ax2, apply_grid=False)
+        self._create_seasonal_pattern_story(ax2, data)
         
-        # Plot main timeline with performance optimizations
-        line = ax.plot(years, counts, 
-                      color=self.config.primary_color,
-                      linewidth=2.5,
-                      marker='o',
-                      markersize=4,
-                      alpha=0.9,
-                      label='Annual Storm Count')[0]
+        # Story 3: Intensity Evolution Over Time (Bottom Left) - Area Chart
+        ax3 = fig.add_subplot(gs[1, 0])
+        self._apply_theme_to_axes(ax3, apply_grid=True)
+        self._create_intensity_evolution_story(ax3, data)
         
-        # Add trend line
-        if len(years) > 3:
-            z = np.polyfit(years, counts, 1)
-            trend_line = np.poly1d(z)
-            ax.plot(years, trend_line(years), 
-                   color=self.config.secondary_color,
-                   linestyle='--',
-                   linewidth=2,
-                   alpha=0.7,
-                   label='Trend')
+        # Story 4: Hurricane Category Distribution by Decade (Bottom Right) - Stacked Bar Chart
+        ax4 = fig.add_subplot(gs[1, 1])
+        self._apply_theme_to_axes(ax4, apply_grid=True)
+        self._create_decadal_category_story(ax4, data)
         
-        # Highlight selected storm years
-        if selected_storms:
-            self._highlight_timeline_storms(ax, data, selected_storms, years, counts)
-        
-        # Styling and formatting
-        self._style_timeline_plot(ax, yearly_data)
-        
-        # Add interactive features
-        self._add_timeline_interactivity(ax, canvas, yearly_data)
+        # Add overall title
+        fig.suptitle('Hurricane Timeline Analysis - Four Data Stories', 
+                    fontsize=16, fontweight='bold', 
+                    color=self.config.title_color if hasattr(self.config, 'title_color') else '#ffffff')
         
         # Update canvas
         canvas.draw_idle()
@@ -576,13 +636,294 @@ class NativeVisualizationEngine:
             'figure': fig,
             'canvas': canvas,
             'data_summary': {
-                'total_years': len(years),
-                'avg_storms_per_year': np.mean(counts),
-                'max_storms_year': years[np.argmax(counts)] if len(years) > 0 else None,
-                'max_storms_count': np.max(counts) if len(counts) > 0 else 0,
-                'render_time_ms': render_time * 1000
+                'total_years': len(data['year'].unique()) if not data.empty else 0,
+                'total_storms': len(data.groupby(['name', 'year'])) if not data.empty else 0,
+                'render_time_ms': render_time * 1000,
+                'stories': ['Annual Activity', 'Seasonal Patterns', 'Intensity Evolution', 'Decadal Categories']
             }
         }
+    
+    def _create_annual_activity_story(self, ax, data: pd.DataFrame, selected_storms: List[str] = None):
+        """Story 1: Annual Storm Activity Timeline - Line Chart with trend analysis"""
+        # Process data for timeline
+        yearly_data = self._process_timeline_data(data)
+        
+        years = yearly_data['year'].values
+        counts = yearly_data['storm_count'].values
+        
+        if len(years) == 0:
+            ax.text(0.5, 0.5, 'No temporal data available', 
+                   transform=ax.transAxes, ha='center', va='center')
+            return
+        
+        # Main timeline with enhanced styling
+        line = ax.plot(years, counts, 
+                      color='#4a90e2',
+                      linewidth=3,
+                      marker='o',
+                      markersize=5,
+                      alpha=0.9,
+                      label='Annual Storm Count',
+                      markerfacecolor='white',
+                      markeredgecolor='#4a90e2',
+                      markeredgewidth=2)[0]
+        
+        # Add trend line with confidence interval
+        if len(years) > 3:
+            z = np.polyfit(years, counts, 1)
+            trend_line = np.poly1d(z)
+            trend_values = trend_line(years)
+            
+            ax.plot(years, trend_values, 
+                   color='#ff6b35',
+                   linestyle='--',
+                   linewidth=2.5,
+                   alpha=0.8,
+                   label=f'Trend ({"↗" if z[0] > 0 else "↘"})')
+            
+            # Add confidence band
+            residuals = counts - trend_values
+            std_dev = np.std(residuals)
+            ax.fill_between(years, trend_values - std_dev, trend_values + std_dev,
+                           color='#ff6b35', alpha=0.2, label='Trend Range')
+        
+        # Highlight notable years (high activity)
+        if len(counts) > 5:
+            high_activity_threshold = np.percentile(counts, 90)
+            high_activity_years = years[counts >= high_activity_threshold]
+            high_activity_counts = counts[counts >= high_activity_threshold]
+            
+            ax.scatter(high_activity_years, high_activity_counts, 
+                      color='#ff4757', s=80, alpha=0.8, 
+                      marker='*', zorder=10, label='High Activity Years')
+        
+        # Styling
+        ax.set_xlabel('Year', fontsize=11, fontweight='bold')
+        ax.set_ylabel('Number of Storms', fontsize=11, fontweight='bold')
+        ax.set_title('📈 Annual Hurricane Activity Timeline', fontsize=13, fontweight='bold', pad=15)
+        ax.legend(loc='upper left', fontsize=9)
+        ax.grid(True, alpha=0.3, linestyle=':')
+        
+        # Add statistics annotation
+        avg_storms = np.mean(counts)
+        max_year = years[np.argmax(counts)]
+        max_count = np.max(counts)
+        
+        stats_text = f'Average: {avg_storms:.1f} storms/year\nPeak: {max_count} storms ({max_year})'
+        ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+               verticalalignment='top', fontsize=10,
+               bbox=dict(boxstyle='round,pad=0.5', facecolor='black', alpha=0.7))
+    
+    def _create_seasonal_pattern_story(self, ax, data: pd.DataFrame):
+        """Story 2: Seasonal Distribution Pattern - Circular/Polar Chart"""
+        # Calculate monthly storm frequency
+        if 'month' not in data.columns:
+            ax.text(0.5, 0.5, 'No monthly data available', 
+                   transform=ax.transAxes, ha='center', va='center')
+            return
+        
+        monthly_counts = data.groupby('month').size()
+        
+        # Ensure all months are represented
+        all_months = pd.Series(index=range(1, 13), data=0)
+        all_months.update(monthly_counts)
+        monthly_counts = all_months.fillna(0)
+        
+        months = monthly_counts.index.values
+        counts = monthly_counts.values
+        
+        # Create enhanced circular bar chart
+        month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        
+        # Color gradient for hurricane season intensity
+        colors = ['#74a9cf' if i < 6 or i > 10 else '#e34a33' if 7 <= i <= 9 else '#fd8d3c' 
+                 for i in range(1, 13)]
+        
+        bars = ax.bar(months, counts, color=colors, alpha=0.8, edgecolor='white', linewidth=1)
+        
+        # Highlight peak season
+        peak_season_months = [6, 7, 8, 9, 10, 11]  # June-November
+        for i, bar in enumerate(bars):
+            if (i + 1) in peak_season_months:
+                bar.set_edgecolor('#ff4757')
+                bar.set_linewidth(2)
+        
+        # Styling
+        ax.set_xlabel('Month', fontsize=11, fontweight='bold')
+        ax.set_ylabel('Storm Count', fontsize=11, fontweight='bold') 
+        ax.set_title('🌀 Seasonal Hurricane Pattern', fontsize=13, fontweight='bold', pad=15)
+        ax.set_xticks(months)
+        ax.set_xticklabels(month_names, rotation=45)
+        
+        # Add season annotations
+        peak_months = months[6:11]  # July-November (peak season)
+        if len(peak_months) > 0:
+            peak_avg = np.mean([counts[i-1] for i in peak_months if i-1 < len(counts)])
+            off_season_avg = np.mean([counts[i-1] for i in months if i not in peak_months and i-1 < len(counts)])
+            
+            ax.axhspan(0, peak_avg, alpha=0.2, color='red', 
+                      label=f'Peak Season Avg: {peak_avg:.1f}')
+            
+            # Add text annotation
+            season_text = f'Peak Season (Jun-Nov)\nAverage: {peak_avg:.1f} storms'
+            ax.text(0.98, 0.98, season_text, transform=ax.transAxes,
+                   verticalalignment='top', horizontalalignment='right', fontsize=10,
+                   bbox=dict(boxstyle='round,pad=0.5', facecolor='red', alpha=0.7))
+    
+    def _create_intensity_evolution_story(self, ax, data: pd.DataFrame):
+        """Story 3: Intensity Evolution Over Time - Area Chart showing wind speed trends"""
+        # Calculate yearly average wind speeds by category
+        if 'wind' not in data.columns:
+            ax.text(0.5, 0.5, 'No wind speed data available', 
+                   transform=ax.transAxes, ha='center', va='center')
+            return
+        
+        # Group by year and calculate intensity metrics
+        yearly_intensity = data.groupby('year').agg({
+            'wind': ['mean', 'max', 'min', 'std']
+        }).round(1)
+        
+        yearly_intensity.columns = ['avg_wind', 'max_wind', 'min_wind', 'std_wind']
+        yearly_intensity = yearly_intensity.dropna()
+        
+        if yearly_intensity.empty:
+            ax.text(0.5, 0.5, 'Insufficient intensity data', 
+                   transform=ax.transAxes, ha='center', va='center')
+            return
+        
+        years = yearly_intensity.index.values
+        avg_winds = yearly_intensity['avg_wind'].values
+        max_winds = yearly_intensity['max_wind'].values
+        min_winds = yearly_intensity['min_wind'].values
+        std_winds = yearly_intensity['std_wind'].fillna(0).values
+        
+        # Create layered area chart
+        ax.fill_between(years, min_winds, max_winds, 
+                       color='#74a9cf', alpha=0.3, label='Wind Speed Range')
+        
+        ax.fill_between(years, avg_winds - std_winds, avg_winds + std_winds,
+                       color='#fd8d3c', alpha=0.5, label='Average ± Std Dev')
+        
+        ax.plot(years, avg_winds, color='#2b8cbe', linewidth=3, 
+               marker='o', markersize=4, label='Average Wind Speed')
+        
+        ax.plot(years, max_winds, color='#e34a33', linewidth=2, 
+               linestyle='--', alpha=0.8, label='Peak Wind Speed')
+        
+        # Add category thresholds
+        category_thresholds = [74, 96, 111, 130, 157]
+        category_names = ['Cat 1', 'Cat 2', 'Cat 3', 'Cat 4', 'Cat 5']
+        colors = ['#fdcc8a', '#fc8d59', '#e34a33', '#b30000', '#7a0177']
+        
+        for i, (threshold, name, color) in enumerate(zip(category_thresholds, category_names, colors)):
+            if threshold <= max(max_winds):
+                ax.axhline(y=threshold, color=color, linestyle=':', alpha=0.7, linewidth=1)
+                ax.text(max(years), threshold, f' {name}', verticalalignment='bottom', fontsize=9)
+        
+        # Styling
+        ax.set_xlabel('Year', fontsize=11, fontweight='bold')
+        ax.set_ylabel('Wind Speed (mph)', fontsize=11, fontweight='bold')
+        ax.set_title('💨 Hurricane Intensity Evolution', fontsize=13, fontweight='bold', pad=15)
+        ax.legend(loc='upper left', fontsize=9)
+        ax.grid(True, alpha=0.3, linestyle=':')
+        
+        # Add trend analysis
+        if len(avg_winds) > 3:
+            z = np.polyfit(years, avg_winds, 1)
+            trend_direction = "strengthening" if z[0] > 0 else "weakening"
+            trend_text = f'Intensity Trend: {trend_direction}\n({z[0]:+.2f} mph/year)'
+            
+            ax.text(0.02, 0.98, trend_text, transform=ax.transAxes,
+                   verticalalignment='top', fontsize=10,
+                   bbox=dict(boxstyle='round,pad=0.5', 
+                            facecolor='green' if z[0] < 0 else 'red', alpha=0.7))
+    
+    def _create_decadal_category_story(self, ax, data: pd.DataFrame):
+        """Story 4: Hurricane Category Distribution by Decade - Stacked Bar Chart"""
+        # Calculate category distribution by decade
+        if 'category' not in data.columns and 'wind' not in data.columns:
+            ax.text(0.5, 0.5, 'No category data available', 
+                   transform=ax.transAxes, ha='center', va='center')
+            return
+        
+        # Create decade groups
+        data_copy = data.copy()
+        data_copy['decade'] = (data_copy['year'] // 10) * 10
+        
+        # Determine categories from wind speed if category not available
+        if 'category' not in data_copy.columns:
+            data_copy['category'] = pd.cut(data_copy['wind'], 
+                                         bins=[0, 39, 73, 95, 110, 129, 156, 999],
+                                         labels=['TD', 'TS', '1', '2', '3', '4', '5'])
+        
+        # Group by decade and category
+        decade_categories = data_copy.groupby(['decade', 'category']).size().unstack(fill_value=0)
+        
+        if decade_categories.empty:
+            ax.text(0.5, 0.5, 'Insufficient category data', 
+                   transform=ax.transAxes, ha='center', va='center')
+            return
+        
+        # Prepare data for stacked bar chart
+        decades = decade_categories.index.values
+        category_columns = ['TD', 'TS', '1', '2', '3', '4', '5']
+        
+        # Ensure all categories exist
+        for cat in category_columns:
+            if cat not in decade_categories.columns:
+                decade_categories[cat] = 0
+        
+        # Colors for different categories
+        colors = {
+            'TD': '#74a9cf',   # Light blue
+            'TS': '#2b8cbe',   # Blue  
+            '1': '#fdcc8a',    # Light orange
+            '2': '#fc8d59',    # Orange
+            '3': '#e34a33',    # Red
+            '4': '#b30000',    # Dark red
+            '5': '#7a0177'     # Purple
+        }
+        
+        # Create stacked bar chart
+        bottom = np.zeros(len(decades))
+        bar_width = 5  # 5-year width for decades
+        
+        for cat in category_columns:
+            if cat in decade_categories.columns:
+                values = decade_categories[cat].values
+                bars = ax.bar(decades, values, bar_width, bottom=bottom, 
+                             color=colors[cat], alpha=0.8, 
+                             label=f'{"Tropical Depression" if cat == "TD" else "Tropical Storm" if cat == "TS" else f"Category {cat}"}',
+                             edgecolor='white', linewidth=0.5)
+                bottom += values
+        
+        # Styling
+        ax.set_xlabel('Decade', fontsize=11, fontweight='bold')
+        ax.set_ylabel('Number of Storms', fontsize=11, fontweight='bold')
+        ax.set_title('📊 Hurricane Categories by Decade', fontsize=13, fontweight='bold', pad=15)
+        
+        # Format x-axis
+        decade_labels = [f"{int(d)}s" for d in decades]
+        ax.set_xticks(decades)
+        ax.set_xticklabels(decade_labels, rotation=45)
+        
+        # Legend
+        ax.legend(loc='upper right', fontsize=8, ncol=2)
+        ax.grid(True, alpha=0.3, linestyle=':', axis='y')
+        
+        # Add trend annotation
+        total_by_decade = decade_categories.sum(axis=1)
+        if len(total_by_decade) > 2:
+            recent_avg = total_by_decade.tail(2).mean()
+            early_avg = total_by_decade.head(2).mean()
+            change_pct = ((recent_avg - early_avg) / early_avg * 100) if early_avg > 0 else 0
+            
+            trend_text = f'Activity Change:\n{change_pct:+.1f}% (recent vs early)'
+            ax.text(0.02, 0.98, trend_text, transform=ax.transAxes,
+                   verticalalignment='top', fontsize=10,
+                   bbox=dict(boxstyle='round,pad=0.5', 
+                            facecolor='green' if change_pct < 0 else 'orange', alpha=0.7))
     
     def generate_map_visualization(self, data: pd.DataFrame, 
                                  parent_frame, selected_storms: List[str] = None,
@@ -603,6 +944,9 @@ class NativeVisualizationEngine:
         
         # Create subplot for regional map
         ax = fig.add_subplot(111)
+        
+        # Apply theme styling to axes
+        self._apply_theme_to_axes(ax, apply_grid=False)  # Maps don't need grid
         
         # Apply filtering options if provided
         filtered_data = self._apply_map_filters(data, filter_options or {})
@@ -788,7 +1132,9 @@ class NativeVisualizationEngine:
                 ax.annotate(track['name'], track['start_pos'], 
                            xytext=(5, 5), textcoords='offset points',
                            fontsize=9, fontweight='bold', 
-                           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+                           bbox=dict(boxstyle='round,pad=0.3', 
+                                    facecolor=self.theme.colors.surface if self.theme else 'white', 
+                                    alpha=0.8))
     
     def _plot_single_storm_track(self, ax, track_data: Dict, selected_storms: List[str] = None):
         """Plot single storm track with detailed information"""
@@ -850,46 +1196,130 @@ class NativeVisualizationEngine:
                    color=color, linewidth=linewidth, alpha=alpha, solid_capstyle='round')
     
     def _add_gulf_coast_features(self, ax):
-        """Add Gulf Coast geographic features optimized for Linux Mint"""
-        # Enhanced coastline data for better regional context
+        """Add comprehensive geographical features with visible landmasses, state borders, and Caribbean"""
         
-        # Texas Gulf Coast (more detailed)
-        tx_coast_lon = [-97.8, -97.4, -96.8, -95.9, -95.3, -94.8, -94.0, -93.8]
-        tx_coast_lat = [26.0, 26.8, 27.8, 28.9, 29.3, 29.6, 29.8, 29.7]
+        # Define landmass and coastline style
+        land_style = dict(facecolor='#f0f4f8', edgecolor='white', linewidth=2.5, alpha=0.8, zorder=1)
+        coastline_style = dict(color='white', linewidth=2.5, alpha=0.95, zorder=2)
+        state_border_style = dict(color='#e2e8f0', linewidth=1.5, linestyle='--', alpha=0.7, zorder=2)
         
-        # Louisiana Coast with delta
+        # === GULF COAST STATES LANDMASSES ===
+        
+        # Texas (simplified polygon)
+        tx_lon = [-106.5, -93.5, -93.5, -94.0, -97.8, -97.4, -96.8, -95.9, -95.3, -94.8, -94.0, -93.8, -93.8, -103.0, -106.5, -106.5]
+        tx_lat = [25.8, 25.8, 29.7, 29.8, 26.0, 26.8, 27.8, 28.9, 29.3, 29.6, 29.8, 29.7, 36.5, 36.5, 32.0, 25.8]
+        ax.fill(tx_lon, tx_lat, **land_style)
+        ax.plot(tx_lon, tx_lat, **coastline_style)
+        
+        # Louisiana (with detailed coastline and delta)
+        la_lon = [-93.8, -89.0, -89.0, -91.2, -93.8, -93.8]
+        la_lat = [29.7, 29.0, 33.0, 33.0, 33.0, 29.7]
+        ax.fill(la_lon, la_lat, **land_style)
+        
+        # Louisiana detailed coast
         la_coast_lon = [-93.8, -93.0, -92.2, -91.5, -90.8, -90.0, -89.4, -89.2, -89.0]
         la_coast_lat = [29.7, 29.8, 29.8, 29.6, 29.4, 29.2, 29.1, 29.2, 29.0]
-        
-        # Mississippi/Alabama Coast
-        ms_al_coast_lon = [-89.0, -88.5, -88.0, -87.5, -87.2, -87.0]
-        ms_al_coast_lat = [29.0, 29.4, 30.2, 30.3, 30.4, 30.4]
-        
-        # Florida Panhandle and West Coast
-        fl_coast_lon = [-87.0, -86.5, -85.8, -85.0, -84.2, -83.5, -83.0, -82.5, -82.0, -81.8]
-        fl_coast_lat = [30.4, 30.2, 30.0, 29.8, 29.5, 29.0, 28.5, 28.0, 27.5, 26.5]
-        
-        # Plot enhanced coastlines
-        coastline_style = dict(color='#2d3748', linewidth=2.5, alpha=0.9)
-        ax.plot(tx_coast_lon, tx_coast_lat, **coastline_style, label='Gulf Coast')
         ax.plot(la_coast_lon, la_coast_lat, **coastline_style)
-        ax.plot(ms_al_coast_lon, ms_al_coast_lat, **coastline_style)
-        ax.plot(fl_coast_lon, fl_coast_lat, **coastline_style)
         
-        # Add major cities
+        # Mississippi
+        ms_lon = [-91.2, -88.1, -88.1, -91.2, -91.2]
+        ms_lat = [33.0, 35.0, 30.2, 33.0, 33.0]
+        ax.fill(ms_lon, ms_lat, **land_style)
+        
+        # Alabama 
+        al_lon = [-88.1, -85.0, -85.0, -87.5, -88.1, -88.1]
+        al_lat = [35.0, 35.0, 30.2, 30.3, 30.2, 35.0]
+        ax.fill(al_lon, al_lat, **land_style)
+        
+        # Florida (detailed including Keys)
+        fl_main_lon = [-87.0, -80.0, -80.0, -80.5, -82.0, -82.5, -83.0, -83.5, -84.2, -85.0, -85.8, -86.5, -87.0, -87.0]
+        fl_main_lat = [30.4, 31.0, 24.5, 24.5, 24.5, 27.5, 28.0, 28.5, 29.0, 29.5, 29.8, 30.0, 30.2, 30.4]
+        ax.fill(fl_main_lon, fl_main_lat, **land_style)
+        ax.plot(fl_main_lon, fl_main_lat, **coastline_style)
+        
+        # Florida Keys (simplified)
+        keys_lon = [-82.0, -80.0, -81.5, -82.0]
+        keys_lat = [24.5, 24.5, 24.0, 24.5]
+        ax.fill(keys_lon, keys_lat, **land_style)
+        ax.plot(keys_lon, keys_lat, **coastline_style)
+        
+        # === CARIBBEAN ISLANDS ===
+        
+        # Cuba (northern coast visible)
+        cuba_lon = [-85.0, -74.0, -74.0, -85.0, -85.0]
+        cuba_lat = [19.8, 19.8, 23.3, 23.3, 19.8]
+        ax.fill(cuba_lon, cuba_lat, **land_style)
+        ax.plot(cuba_lon, cuba_lat, **coastline_style)
+        
+        # Bahamas (simplified chain)
+        bahamas_islands = [
+            ([-78.0, -77.5, -77.5, -78.0, -78.0], [25.0, 25.0, 26.5, 26.5, 25.0]),  # Nassau area
+            ([-77.5, -77.0, -77.0, -77.5, -77.5], [24.0, 24.0, 24.5, 24.5, 24.0])   # Other keys
+        ]
+        for lon, lat in bahamas_islands:
+            ax.fill(lon, lat, **land_style)
+            ax.plot(lon, lat, **coastline_style)
+        
+        # Jamaica
+        jamaica_lon = [-78.5, -76.0, -76.0, -78.5, -78.5]
+        jamaica_lat = [17.7, 17.7, 18.5, 18.5, 17.7]
+        ax.fill(jamaica_lon, jamaica_lat, **land_style)
+        ax.plot(jamaica_lon, jamaica_lat, **coastline_style)
+        
+        # Haiti/Dominican Republic (Hispaniola)
+        hispaniola_lon = [-74.5, -68.3, -68.3, -74.5, -74.5]
+        hispaniola_lat = [18.0, 18.0, 19.9, 19.9, 18.0]
+        ax.fill(hispaniola_lon, hispaniola_lat, **land_style)
+        ax.plot(hispaniola_lon, hispaniola_lat, **coastline_style)
+        
+        # Puerto Rico
+        pr_lon = [-67.3, -65.2, -65.2, -67.3, -67.3]
+        pr_lat = [17.9, 17.9, 18.5, 18.5, 17.9]
+        ax.fill(pr_lon, pr_lat, **land_style)
+        ax.plot(pr_lon, pr_lat, **coastline_style)
+        
+        # Lesser Antilles (major islands)
+        antilles_islands = [
+            ([-61.9, -61.0, -61.0, -61.9, -61.9], [17.0, 17.0, 17.6, 17.6, 17.0]),  # Antigua
+            ([-61.4, -61.2, -61.2, -61.4, -61.4], [15.3, 15.3, 15.6, 15.6, 15.3]),  # Dominica
+            ([-61.2, -60.8, -60.8, -61.2, -61.2], [14.4, 14.4, 14.9, 14.9, 14.4]),  # Martinique
+        ]
+        for lon, lat in antilles_islands:
+            ax.fill(lon, lat, **land_style)
+            ax.plot(lon, lat, **coastline_style)
+        
+        # === STATE BORDERS ===
+        
+        # Texas-Louisiana border
+        ax.plot([-93.8, -93.8], [29.7, 36.5], **state_border_style)
+        
+        # Louisiana-Mississippi border
+        ax.plot([-91.2, -91.2], [29.0, 35.0], **state_border_style)
+        
+        # Mississippi-Alabama border
+        ax.plot([-88.1, -88.1], [30.2, 35.0], **state_border_style)
+        
+        # Alabama-Florida border
+        ax.plot([-87.0, -85.0], [31.0, 31.0], **state_border_style)
+        ax.plot([-87.0, -87.0], [30.4, 31.0], **state_border_style)
+        
+        # === MAJOR CITIES ===
         cities = {
             'Houston': (-95.37, 29.76),
             'New Orleans': (-90.07, 29.95),
             'Mobile': (-88.04, 30.69),
             'Tampa': (-82.46, 27.95),
-            'Miami': (-80.19, 25.76)
+            'Miami': (-80.19, 25.76),
+            'Havana': (-82.35, 23.13),
+            'Nassau': (-77.35, 25.08)
         }
         
         for city, (lon, lat) in cities.items():
-            ax.plot(lon, lat, 'ko', markersize=6, markerfacecolor='red', 
-                   markeredgecolor='black', markeredgewidth=1)
-            ax.annotate(city, (lon, lat), xytext=(3, 3), textcoords='offset points',
-                       fontsize=8, fontweight='bold', color='darkred')
+            ax.plot(lon, lat, 'o', markersize=5, markerfacecolor='#e53e3e', 
+                   markeredgecolor='white', markeredgewidth=1.5, zorder=5)
+            ax.annotate(city, (lon, lat), xytext=(4, 4), textcoords='offset points',
+                       fontsize=9, fontweight='bold', color='#2d3748', 
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, edgecolor='none'))
         
         # Add state boundaries (simplified)
         # TX-LA border
@@ -929,7 +1359,8 @@ class NativeVisualizationEngine:
             ax.set_ylim(lat_min, lat_max)
         
         # Set aspect ratio for proper geographic projection
-        ax.set_aspect('equal', adjustable='box')
+        # Use 'datalim' to maintain proper geographic proportions while fitting the container
+        ax.set_aspect('equal', adjustable='datalim')
     
     def _add_map_legend_and_labels(self, ax, data: pd.DataFrame):
         """Add legend and labels to the regional map"""
@@ -956,8 +1387,9 @@ class NativeVisualizationEngine:
     
     def _style_regional_map(self, ax, data: pd.DataFrame):
         """Apply styling optimized for Linux Mint display"""
-        # Set background color optimized for Linux Mint
-        ax.set_facecolor('#f7f9fc')  # Light blue-gray background
+        # Set background color using theme
+        chart_bg = self.theme.colors.chart_bg if self.theme else '#f7f9fc'
+        ax.set_facecolor(chart_bg)
         
         # Style the plot area
         ax.spines['top'].set_visible(False)
@@ -1046,18 +1478,22 @@ class NativeVisualizationEngine:
         
         # Category distribution
         ax1 = fig.add_subplot(gs[0, 0])
+        self._apply_theme_to_axes(ax1)
         self._plot_category_distribution(ax1, data)
         
         # Intensity over time
         ax2 = fig.add_subplot(gs[0, 1])
+        self._apply_theme_to_axes(ax2)
         self._plot_intensity_trends(ax2, data)
         
         # Monthly activity
         ax3 = fig.add_subplot(gs[1, 0])
+        self._apply_theme_to_axes(ax3)
         self._plot_monthly_activity(ax3, data)
         
         # Wind speed distribution
         ax4 = fig.add_subplot(gs[1, 1])
+        self._apply_theme_to_axes(ax4)
         self._plot_wind_distribution(ax4, data)
         
         # Add overall title
