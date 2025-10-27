@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  hurricane-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gulf-coast-hurricane-vis
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+    volumes:
+      # Mount X11 socket for GUI display
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Mount data directory for persistence
+      - ./database:/app/database
+      # Mount settings for persistence
+      - ./dashboard_settings.json:/app/dashboard_settings.json
+    network_mode: host
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+  # Optional: PostgreSQL database for future use
+  postgres:
+    image: postgres:15-alpine
+    container_name: hurricane-postgres
+    environment:
+      POSTGRES_DB: hurricane_data
+      POSTGRES_USER: hurricane_user
+      POSTGRES_PASSWORD: hurricane_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    profiles:
+      - database
+
+volumes:
+  postgres_data:

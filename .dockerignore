@@ -1,0 +1,59 @@
+# Add Docker-specific ignores
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Settings (will be mounted as volume)
+# dashboard_settings.json
+
+# Git
+.git/
+.gitignore
+
+# Documentation build
+docs/_build/
+
+# Deprecated files
+deprecated/
+
+# Test files
+tests/
+test_*.py
+
+# Environment files
+.env
+.env.local

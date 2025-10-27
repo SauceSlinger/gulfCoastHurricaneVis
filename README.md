@@ -18,11 +18,47 @@ A high-performance, beautiful customTkinter application for visualizing hurrican
 - **Materialized Views**: Pre-computed aggregations for complex queries
 
 ### 📊 Advanced Visualizations
-- **4-Story Timeline Analysis**: Annual Activity, Seasonal Patterns, Intensity Evolution, Decadal Categories
-- **Enhanced Interactive Maps**: Gulf Coast geographical features, Caribbean islands, state borders
-- **Statistical Analysis**: Multi-panel category distributions and comprehensive trends
-- **Professional Map Filtering**: Year range, category, wind speed with real-time updates
-- **Dynamic Storm Selection**: 19,066+ storms with intelligent search and filtering
+
+#### 📋 Overview Tab
+- **Dataset Summary**: Total records, date range, unique storms
+- **Category Distribution**: Visual breakdown with progress bars
+- **Wind Speed Statistics**: Min, max, average, median
+- **Yearly Activity**: Total years and average storms per year
+- **Top 10 Storms**: Interactive table of most intense hurricanes
+
+#### 📈 Interactive Timeline Analysis
+- **Annual Storm Activity**: Year range sliders (1975-2021) with trend analysis
+  - Line chart showing storm counts per year
+  - Automatic trend line with up/down indicators
+  - Peak year highlighting and statistics
+  
+- **Seasonal Distribution**: Month range sliders (Jan-Dec)
+  - Bar chart with monthly storm frequency
+  - Peak month highlighting in orange
+  - Total storm counts by season
+  
+- **Intensity Evolution**: Category threshold slider (All → Cat 5 only)
+  - Area chart showing wind speed ranges over time
+  - Average wind speed tracking
+  - Maximum intensity trends
+  
+- **Decadal Category Distribution**: Decade range sliders (1970s-2020s)
+  - Stacked bar chart by decade
+  - Color-coded category breakdown
+  - Decade-by-decade comparisons
+
+#### 🗺️ Interactive Map Visualization
+- **Gulf Coast Focus**: Enhanced geographical features
+- **Caribbean Coverage**: Island outlines and regional context
+- **Storm Track Filtering**: Year range, category, wind speed, month filters
+- **Interactive Controls**: Pan, zoom, click for storm details
+- **Real-time Updates**: Instant filter application with debug logging
+
+#### 📊 Statistical Analysis
+- **Multi-panel Charts**: Comprehensive statistical breakdowns
+- **Category Distributions**: Visual analysis of storm intensities
+- **Trend Analysis**: Long-term pattern identification
+- **Data Insights**: Statistical summaries and key metrics
 
 ### 🔧 Enhanced Architecture
 - **View Manager**: Persistent caching with intelligent cache management
@@ -32,72 +68,113 @@ A high-performance, beautiful customTkinter application for visualizing hurrican
 
 ## 🚀 Quick Start
 
-### Prerequisites
-- Python 3.8+
-- PostgreSQL 12+ (running and accessible)
-- 4GB+ RAM recommended for optimal performance
+### 🐳 Docker (Recommended)
 
-### 🎯 Professional Loading System
+The easiest way to run the dashboard is using Docker:
+
 ```bash
-# Launch with professional loading interface and real-time logs
-python gui_launcher.py
+# Clone the repository
+git clone https://github.com/SauceSlinger/gulfCoastHurricaneVis.git
+cd gulfCoastHurricaneVis
 
-# Quick tabbed launch (direct)
-python launch_tabbed.py
-
-# Simple launcher (basic)
-python simple_launcher.py
+# Run with Docker Compose (one command!)
+./run-docker.sh
 ```
 
-**New Professional Launcher Features:**
-- 📋 **Real-Time Initialization Logging**: See step-by-step progress in scrollable log display
-- 🎨 **Professional Loading Interface**: 650x500 responsive loading window with progress tracking
-- ⚡ **Visualization Coordination**: Ensures all visualizations complete before dashboard display
-- 🔄 **Loading Sequence Management**: No premature transitions, complete initialization transparency
+The Docker setup will:
+- ✅ Install all dependencies automatically
+- ✅ Configure the GUI display (X11 forwarding)
+- ✅ Mount persistent storage for settings
+- ✅ Launch the dashboard in an isolated environment
 
-The launcher will automatically:
-1. ✅ Check and install required packages
-2. 🗄️ Set up PostgreSQL database and schema (with CSV fallback)
-3. 📊 Load 19,066+ hurricane records with progress tracking
-4. 🎨 Initialize all four visualization panels (Overview, Timeline, Map, Analysis)
-5. 🚀 Launch the dashboard only when fully ready
-
-### Manual Setup (Advanced)
+**Manual Docker Commands:**
 ```bash
+# Build the image
+docker-compose build
+
+# Run the dashboard
+xhost +local:docker  # Allow Docker to access display
+docker-compose up
+
+# With database (optional)
+docker-compose --profile database up
+
+# Stop the application
+docker-compose down
+```
+
+### � Local Installation
+
+#### Prerequisites
+- Python 3.12+
+- PostgreSQL 12+ (optional - CSV fallback available)
+- Linux with X11 or macOS with XQuartz
+
+#### Installation Steps
+
+```bash
+# Clone repository
+git clone https://github.com/SauceSlinger/gulfCoastHurricaneVis.git
+cd gulfCoastHurricaneVis
+
+# Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+# .venv\Scripts\activate   # Windows
+
 # Install dependencies
-pip install customtkinter plotly pandas numpy psycopg2-binary python-dotenv
+pip install -r requirements.txt
 
-# Set up database (one time)
-python setup_database.py
-
-# Migrate data from CSV to PostgreSQL (one time)
-python migrate_data.py
-
-# Run performance tests (optional)
-python test_performance.py
-
-# Launch dashboard
-python dashboard.py
+# Launch the dashboard
+python launch_with_loading.py
 ```
 
 ## 📁 Project Structure
 
 ```
 gulfCoastHurricaneVis/
-├── 🚀 launch_dashboard.py      # One-click launcher with setup
-├── 📊 dashboard.py             # Main application with 3-panel layout
-├── 🗄️ database_manager.py      # PostgreSQL connection pooling & caching
-├── ⚡ view_manager.py          # Persistent view caching system
-├── 📈 data_processor_db.py     # Database-optimized data processing
-├── 🎨 visualizations.py       # Plotly visualization generation
-├── 🔧 setup_database.py       # Automated database setup
-├── 📦 migrate_data.py          # CSV to PostgreSQL migration
-├── 🧪 test_performance.py     # Performance validation tests
-├── 📄 storms.csv               # Original hurricane data
-├── 🗃️ database/
-│   ├── schema.sql              # Optimized PostgreSQL schema
-│   └── indexes.sql             # Performance indexes
-└── 📖 README.md               # This file
+├── � Docker & Deployment
+│   ├── Dockerfile              # Container image definition
+│   ├── docker-compose.yml      # Multi-container orchestration
+│   ├── .dockerignore          # Docker build exclusions
+│   └── run-docker.sh          # One-click Docker launcher
+│
+├── 🚀 Launchers
+│   ├── launch_with_loading.py # Main launcher with loading screen
+│   ├── launch_tabbed.py       # Direct tabbed dashboard launch
+│   └── gui_launcher.py        # Legacy GUI launcher
+│
+├── 📊 Core Application
+│   ├── tabbed_native_dashboard.py  # Main dashboard with 4 tabs
+│   ├── native_visualizations.py   # Matplotlib/Cartopy visualizations
+│   ├── loading_window.py          # Professional loading interface
+│   └── aesthetic_theme.py         # Dark theme system
+│
+├── 🗄️ Data Management
+│   ├── database_manager.py    # PostgreSQL connection & pooling
+│   ├── data_processor_db.py   # Database-optimized processing
+│   ├── csv_data_processor.py  # CSV fallback processor
+│   └── view_manager.py        # View caching system
+│
+├── 🎨 UI Components
+│   ├── settings_manager.py    # Settings persistence
+│   └── logger_config.py       # Logging configuration
+│
+├── 📄 Data & Configuration
+│   ├── storms.csv             # Hurricane data (19,066 records)
+│   ├── requirements.txt       # Python dependencies
+│   ├── dashboard_settings.json # User preferences
+│   └── .env                   # Environment variables (optional)
+│
+├── 🗃️ Database (optional)
+│   ├── schema.sql             # PostgreSQL schema
+│   └── indexes.sql            # Performance indexes
+│
+└── 📖 Documentation
+    ├── README.md              # This file
+    ├── CHANGELOG.md           # Version history
+    ├── LICENSE                # MIT License
+    └── docs/                  # Additional documentation
 ```
 
 ## 🎯 Usage Guide

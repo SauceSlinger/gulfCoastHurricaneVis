@@ -20,6 +20,8 @@ import seaborn as sns
 from typing import List, Tuple, Optional, Dict, Any
 import threading
 from dataclasses import dataclass
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 
 # Import settings system
 try:
@@ -148,38 +150,62 @@ class NativeVisualizationEngine:
         
         # Use responsive sizing based on available space with appropriate margins
         if plot_type == "map":  # Map visualizations need to fit available space
-            # Use most of available space but leave room for frame borders and scrollbars
-            pixel_width = max(600, int(available_width * 0.92))   # 92% width, at least 600px 
-            pixel_height = max(400, int(available_height * 0.82)) # 82% height, leave room for margins
+            # Use nearly ALL available space for maximum visual prominence
+            # Increase multipliers to make map fill the entire tab area
+            pixel_width = max(600, int(available_width * 1.0))    # 100% width
+            pixel_height = max(400, int(available_height * 1.0))  # 100% height
+            # Use higher DPI for sharper rendering of storm tracks
+            effective_dpi = int(self.config.dpi * 1.2)  # 20% higher DPI for maps
         elif width and width > 1000:  # Large tab interface
             pixel_width = max(700, int(available_width * 0.90))
             pixel_height = max(500, int(available_height * 0.80))
+            effective_dpi = self.config.dpi
         else:  # Regular embedded view
             pixel_width = max(500, int(available_width * 0.85))
             pixel_height = max(350, int(available_height * 0.75))
+            effective_dpi = self.config.dpi
         
-        # Convert pixels to inches using DPI
-        fig_width = pixel_width / self.config.dpi
-        fig_height = pixel_height / self.config.dpi
+        # Convert pixels to inches using effective DPI
+        fig_width = pixel_width / effective_dpi
+        fig_height = pixel_height / effective_dpi
         
         # Create figure with manual layout and themed styling
         facecolor = self.theme.colors.chart_bg if self.theme else '#2b2b2b'
         fig = Figure(figsize=(fig_width, fig_height), 
-                    dpi=self.config.dpi,
+                    dpi=effective_dpi,
                     facecolor=facecolor,
                     layout='none')  # Use explicit 'none' layout for full manual control
         
         # Set optimized margins based on plot type with manual layout control
         if plot_type == "map":
-            # Optimized layout for geographic visualizations - balanced margins for proper aspect ratio
-            # Leave more room for axis labels while maintaining good proportions
-            fig.subplots_adjust(left=0.08, bottom=0.12, right=0.96, top=0.88, wspace=0.1, hspace=0.1)
+            # AGGRESSIVE layout for geographic visualizations - absolute minimal margins
+            # to make storm tracks as visually prominent as possible
+            fig.subplots_adjust(left=0.02, bottom=0.02, right=0.98, top=0.96, wspace=0.05, hspace=0.05)
         else:
             # Standard margins for timeline and analysis visualizations
             fig.subplots_adjust(left=0.1, bottom=0.1, right=0.95, top=0.9, wspace=0.2, hspace=0.3)
         
         # Create canvas widget - use grid to match parent frame management
         canvas = FigureCanvasTkAgg(fig, parent_frame)
+        
+        # For map plots, don't set background to allow transparency
+        # The matplotlib figure and axes are already set to transparent
+        # Ensure the Tk widget background matches the dashboard theme so transparent areas show the intended background
+        try:
+            # Prefer parent frame bg if available, otherwise fall back to theme chart background
+            parent_bg = parent_frame.cget('bg') if parent_frame and parent_frame.cget('bg') else None
+        except Exception:
+            parent_bg = None
+
+        if not parent_bg:
+            parent_bg = self.theme.colors.chart_bg if getattr(self, 'theme', None) and getattr(self.theme, 'colors', None) else '#2b2b2b'
+
+        try:
+            parent_frame.configure(bg=parent_bg)
+            canvas.get_tk_widget().configure(bg=parent_bg)
+        except Exception:
+            # Some custom frames may not accept bg config — ignore silently
+            pass
         
         # Configure parent frame grid if needed
         parent_frame.grid_rowconfigure(0, weight=1)
@@ -929,7 +955,7 @@ class NativeVisualizationEngine:
                                  parent_frame, selected_storms: List[str] = None,
                                  show_multiple_tracks: bool = True,
                                  filter_options: Dict = None) -> Dict[str, Any]:
-        """Generate enhanced regional map visualization with multiple storm tracks"""
+        """Generate enhanced regional map visualization with Cartopy geographical background"""
         import time
         start_time = time.time()
         
@@ -939,42 +965,99 @@ class NativeVisualizationEngine:
         # Create embedded canvas with larger size for regional mapping
         fig, canvas = self.create_embedded_canvas(parent_frame, "map")
         
-        # Clear any existing plots
+        # Clear any existing plots first, then set dark background to match dashboard theme
         fig.clear()
+        # Use dark background color from theme instead of transparent
+        dark_bg = self.theme.colors.chart_bg if self.theme else '#1a1a1a'
+        fig.set_facecolor(dark_bg)
+
+        # Tighten margins so the map + storm chart take up the full widget area
+        # Use very small bottom margin so the axes can sit flush with the
+        # configuration/filter bar and the axis label can appear just above
+        # the bottom of the window.
+        try:
+            fig.subplots_adjust(left=0.02, bottom=0.005, right=0.99, top=0.995, wspace=0.0, hspace=0.0)
+        except Exception:
+            # older matplotlib may ignore some params - ignore failures
+            pass
+
+        # Create Cartopy axes with PlateCarree projection (matches storm data coordinates)
+        ax = fig.add_subplot(111, projection=ccrs.PlateCarree())
+
+        # Set axes background to match dark theme for contrast with white outlines
+        dark_bg = self.theme.colors.chart_bg if self.theme else '#1a1a1a'
+        ax.set_facecolor(dark_bg)
         
-        # Create subplot for regional map
-        ax = fig.add_subplot(111)
+        # Use 'equal' aspect to maintain proper geographic proportions
+        # This prevents the map from looking warped/stretched
+        try:
+            ax.set_aspect('equal')
+        except Exception:
+            pass
+
+        # Force the axes to occupy MAXIMUM area - fill the entire figure
+        # This makes storm tracks as visually prominent as possible
+        try:
+            ax.set_position([0.0, 0.0, 1.0, 1.0])  # Fill 100% of figure area
+        except Exception:
+            pass
         
-        # Apply theme styling to axes
-        self._apply_theme_to_axes(ax, apply_grid=False)  # Maps don't need grid
+        # Add geographical background features FIRST (lowest zorder)
+        self._add_cartopy_background(ax)
         
         # Apply filtering options if provided
         filtered_data = self._apply_map_filters(data, filter_options or {})
         
-        # Generate regional map with storm tracks
-        if show_multiple_tracks and len(filtered_data) > 0:
+        # Initialize track_data for return value
+        track_data = {}
+        
+        # Check if we have data after filtering
+        if len(filtered_data) == 0:
+            # No data matches the filters - show message on map
+            ax.text(0.5, 0.5, 'No storms match the current filter criteria\n\nTry adjusting your filters',
+                   transform=ax.transAxes,
+                   ha='center', va='center',
+                   fontsize=14, fontweight='bold',
+                   color='white',
+                   bbox=dict(boxstyle='round,pad=1', facecolor='#333333', alpha=0.9, edgecolor='#4a9eff', linewidth=2))
+        elif show_multiple_tracks:
             # Show multiple storm tracks for regional overview
             track_data = self._process_regional_tracks(filtered_data, selected_storms)
             self._plot_multiple_storm_tracks(ax, track_data, selected_storms)
         else:
             # Show single storm track
             track_data = self._process_single_track(filtered_data, selected_storms)
-            self._plot_single_storm_track(ax, track_data, selected_storms)
-        
-        # Add Gulf Coast regional map features
-        self._add_gulf_coast_features(ax)
+            # Plot the single track directly from the dict
+            if track_data:
+                track_key = list(track_data.keys())[0]
+                track = track_data[track_key]
+                colors = {
+                    'TD': '#74a9cf', 'TS': '#2b8cbe', 'H1': '#fdcc8a', 'H2': '#fc8d59',
+                    'H3': '#e34a33', 'H4': '#b30000', 'H5': '#7a0177'
+                }
+                # Plot single selected track with thin lines for clean appearance
+                self._plot_single_track_line(ax, track, colors, alpha=0.95, linewidth=1.6, zorder=15)
+                # Add storm name label
+                if track.get('start_pos'):
+                    ax.annotate(track['name'], track['start_pos'], 
+                               xytext=(5, 5), textcoords='offset points',
+                               fontsize=12, fontweight='bold', 
+                               bbox=dict(boxstyle='round,pad=0.3', 
+                                        facecolor=self.theme.colors.surface if self.theme else 'white', 
+                                        alpha=0.9),
+                               zorder=20)
         
         # Set regional map boundaries (Gulf Coast focus)
-        self._set_regional_boundaries(ax, filtered_data)
+        self._set_cartopy_boundaries(ax, filtered_data)
         
         # Add map legend and labels
         self._add_map_legend_and_labels(ax, filtered_data)
         
         # Styling and formatting for Linux Mint compatibility
-        self._style_regional_map(ax, filtered_data)
+        self._style_cartopy_map(ax, filtered_data)
         
         # Add interactive features (Linux Mint optimized)
-        self._add_regional_interactivity(ax, canvas, track_data)
+        self._add_cartopy_interactivity(ax, canvas, track_data)
         
         # Update canvas
         canvas.draw_idle()
@@ -990,7 +1073,7 @@ class NativeVisualizationEngine:
                 'total_storms': len(filtered_data.groupby(['name', 'year'])) if not filtered_data.empty else 0,
                 'total_tracks': len(track_data) if 'track_data' in locals() else 0,
                 'render_time_ms': render_time * 1000,
-                'map_type': 'regional_multi_track' if show_multiple_tracks else 'single_track'
+                'map_type': 'cartopy_multi_track' if show_multiple_tracks else 'cartopy_single_track'
             }
         }
     
@@ -998,43 +1081,108 @@ class NativeVisualizationEngine:
         """Apply filtering options to map data"""
         filtered_data = data.copy()
         
-        # Year range filter
-        if 'start_year' in filter_options and 'end_year' in filter_options:
-            filtered_data = filtered_data[
-                (filtered_data['year'] >= filter_options['start_year']) &
-                (filtered_data['year'] <= filter_options['end_year'])
-            ]
+        print(f"\n{'='*60}")
+        print(f"🔍 FILTER APPLICATION DEBUG")
+        print(f"{'='*60}")
+        print(f"Starting records: {len(filtered_data)}")
+        print(f"Filter options received: {filter_options}")
+        print(f"{'='*60}\n")
         
-        # Category filter
+        # Year range filter - accept both key formats for compatibility
+        year_start = filter_options.get('year_start')
+        if year_start is None:
+            year_start = filter_options.get('start_year')
+        
+        year_end = filter_options.get('year_end')
+        if year_end is None:
+            year_end = filter_options.get('end_year')
+        
+        print(f"📅 Year filter values extracted:")
+        print(f"  year_start = {year_start} (type: {type(year_start)})")
+        print(f"  year_end = {year_end} (type: {type(year_end)})")
+        
+        if year_start is not None and year_end is not None:
+            print(f"  ✅ Applying year filter: {year_start} <= year <= {year_end}")
+            before_count = len(filtered_data)
+            filtered_data = filtered_data[
+                (filtered_data['year'] >= year_start) &
+                (filtered_data['year'] <= year_end)
+            ]
+            after_count = len(filtered_data)
+            print(f"  � Result: {before_count} → {after_count} records")
+            if after_count < before_count:
+                print(f"  ✂️ Removed {before_count - after_count} records outside year range")
+        else:
+            print(f"  ⚠️ Year filter NOT applied (year_start or year_end is None)")
+        print()
+        
+        # Category filter - handle multiple category name formats
         if 'categories' in filter_options and filter_options['categories']:
-            # Handle both numeric and string categories
+            print(f"🌀 Category filter:")
+            print(f"  Categories requested: {filter_options['categories']}")
+            
+            # Build category mask
             category_mask = pd.Series(False, index=filtered_data.index)
+            before_count = len(filtered_data)
+            
             for cat in filter_options['categories']:
-                if cat == 'TD':  # Tropical Depression
+                # Handle different category name formats
+                if cat == 'TD' or cat == 'Tropical Depression':
                     category_mask |= (filtered_data['status'] == 'tropical depression')
-                elif cat == 'TS':  # Tropical Storm
+                elif cat == 'TS' or cat == 'Tropical Storm':
                     category_mask |= (filtered_data['status'] == 'tropical storm')
-                elif cat in ['1', '2', '3', '4', '5']:  # Hurricane categories
+                elif cat in ['1', '2', '3', '4', '5']:
+                    # Numeric category as string
                     category_mask |= (filtered_data['category'] == int(cat))
+                elif cat.startswith('Category '):
+                    # "Category 1", "Category 2", etc.
+                    cat_num = int(cat.split()[-1])
+                    category_mask |= (filtered_data['category'] == cat_num)
+                elif cat in ['H1', 'H2', 'H3', 'H4', 'H5']:
+                    # Hurricane category format
+                    cat_num = int(cat[1])
+                    category_mask |= (filtered_data['category'] == cat_num)
+            
             filtered_data = filtered_data[category_mask]
+            after_count = len(filtered_data)
+            print(f"  📊 Result: {before_count} → {after_count} records")
+            if after_count < before_count:
+                print(f"  ✂️ Removed {before_count - after_count} records not matching categories")
+        else:
+            print(f"🌀 Category filter: SKIPPED (no categories specified or empty list)")
+        print()
         
         # Wind speed filter
         if 'min_wind' in filter_options:
+            before_count = len(filtered_data)
             filtered_data = filtered_data[filtered_data['wind'] >= filter_options['min_wind']]
+            after_count = len(filtered_data)
+            print(f"💨 Min wind filter (>= {filter_options['min_wind']} mph): {before_count} → {after_count} records")
+        
         if 'max_wind' in filter_options:
+            before_count = len(filtered_data)
             filtered_data = filtered_data[filtered_data['wind'] <= filter_options['max_wind']]
+            after_count = len(filtered_data)
+            print(f"💨 Max wind filter (<= {filter_options['max_wind']} mph): {before_count} → {after_count} records")
+        print()
         
         # Month filter
         if 'months' in filter_options and filter_options['months']:
+            before_count = len(filtered_data)
             filtered_data = filtered_data[filtered_data['month'].isin(filter_options['months'])]
+            after_count = len(filtered_data)
+            print(f"📆 Month filter: {before_count} → {after_count} records")
         
+        print(f"{'='*60}")
+        print(f"🎯 FINAL RESULT: {len(filtered_data)} records after all filters")
+        print(f"{'='*60}\n")
         return filtered_data
     
     def _process_regional_tracks(self, data: pd.DataFrame, selected_storms: List[str] = None) -> Dict:
         """Process data for regional multi-track display"""
         track_data = {}
         
-        # Group by storm (name + year combination)
+        # Group by storm (name + year)
         storm_groups = data.groupby(['name', 'year'])
         
         for (storm_name, year), storm_data in storm_groups:
@@ -1046,7 +1194,27 @@ class NativeVisualizationEngine:
             
             # Get intensity data for color coding
             winds = storm_data['wind'].values
-            categories = storm_data['category'].fillna(0).values
+            
+            # Convert numeric categories to category strings for proper color mapping
+            category_nums = storm_data['category'].fillna(-1).values
+            categories = []
+            for cat in category_nums:
+                if cat == -1:
+                    categories.append('TD')
+                elif cat == 0:
+                    categories.append('TS')
+                elif cat == 1:
+                    categories.append('H1')
+                elif cat == 2:
+                    categories.append('H2')
+                elif cat == 3:
+                    categories.append('H3')
+                elif cat == 4:
+                    categories.append('H4')
+                elif cat == 5:
+                    categories.append('H5')
+                else:
+                    categories.append('TD')
             
             # Determine if this storm is selected
             is_selected = selected_storms and f"{storm_name} ({year})" in selected_storms
@@ -1096,7 +1264,7 @@ class NativeVisualizationEngine:
         return self._process_regional_tracks(storm_data, selected_storms)
     
     def _plot_multiple_storm_tracks(self, ax, track_data: Dict, selected_storms: List[str] = None):
-        """Plot multiple storm tracks on regional map"""
+        """Plot multiple storm tracks on Cartopy map with proper coordinate transformation"""
         import matplotlib.colors as mcolors
         
         # Define color scheme for different storm intensities
@@ -1114,19 +1282,21 @@ class NativeVisualizationEngine:
         regular_tracks = []
         
         # Separate selected and regular tracks
-        for storm_key, track in track_data.items():
+        for track_key, track in track_data.items():
             if track['is_selected']:
                 selected_tracks.append(track)
             else:
                 regular_tracks.append(track)
         
-        # Plot regular tracks first (background)
+        # Plot regular tracks first (background) - ensure high zorder to appear above geography
+        # Use very thin lines for cleaner appearance, with good category-based color visibility
         for track in regular_tracks:
-            self._plot_single_track_line(ax, track, colors, alpha=0.3, linewidth=1.0)
+            self._plot_single_track_line(ax, track, colors, alpha=0.7, linewidth=1.2, zorder=10)
         
-        # Plot selected tracks on top (highlighted)
+        # Plot selected tracks on top (highlighted) - highest zorder
+        # Use slightly thicker for visual prominence without overwhelming the map
         for track in selected_tracks:
-            self._plot_single_track_line(ax, track, colors, alpha=0.9, linewidth=2.5)
+            self._plot_single_track_line(ax, track, colors, alpha=0.95, linewidth=1.6, zorder=15)
             # Add storm name label
             if track['start_pos']:
                 ax.annotate(track['name'], track['start_pos'], 
@@ -1134,66 +1304,34 @@ class NativeVisualizationEngine:
                            fontsize=9, fontweight='bold', 
                            bbox=dict(boxstyle='round,pad=0.3', 
                                     facecolor=self.theme.colors.surface if self.theme else 'white', 
-                                    alpha=0.8))
+                                    alpha=0.9),
+                           zorder=20)
     
-    def _plot_single_storm_track(self, ax, track_data: Dict, selected_storms: List[str] = None):
-        """Plot single storm track with detailed information"""
-        if not track_data:
+    def _plot_single_track_line(self, ax, track: Dict, colors: Dict[str, str], 
+                               alpha: float = 0.8, linewidth: float = 1.5, zorder: int = 10):
+        """Plot a single storm track line on Cartopy map with category-based coloring"""
+        import numpy as np
+        
+        # Ensure we have valid track data
+        lons = track.get('lons')
+        lats = track.get('lats')
+        if lons is None or lats is None or len(lons) < 2 or len(lats) < 2:
             return
         
-        # Get the first (and likely only) track
-        track = list(track_data.values())[0]
+        # Determine the dominant category for coloring (use the highest category reached)
+        categories = track.get('categories', [])
+        if categories is not None and len(categories) > 0:
+            # Map category strings to numeric values for comparison
+            category_values = {'TD': 0, 'TS': 1, 'H1': 2, 'H2': 3, 'H3': 4, 'H4': 5, 'H5': 6}
+            max_category = max(categories, key=lambda x: category_values.get(x, 0))
+            color = colors.get(max_category, colors.get('TS', '#2b8cbe'))  # Default to TS color
+        else:
+            color = colors.get('TS', '#2b8cbe')  # Default color
         
-        # Plot detailed track with intensity markers
-        lons, lats = track['lons'], track['lats']
-        winds = track['winds']
-        
-        # Create scatter plot with wind speed color coding
-        scatter = ax.scatter(lons, lats, c=winds, cmap='YlOrRd', 
-                           s=30, alpha=0.8, edgecolors='black', linewidth=0.5)
-        
-        # Plot track line
-        ax.plot(lons, lats, 'k-', linewidth=2, alpha=0.6)
-        
-        # Mark start and end points
-        if len(lons) > 0:
-            ax.scatter(lons[0], lats[0], c='green', s=100, marker='^', 
-                      label='Start', edgecolors='black', linewidth=1)
-            ax.scatter(lons[-1], lats[-1], c='red', s=100, marker='v', 
-                      label='End', edgecolors='black', linewidth=1)
-        
-        # Add colorbar for wind speeds
-        cbar = plt.colorbar(scatter, ax=ax, shrink=0.8, aspect=20)
-        cbar.set_label('Wind Speed (mph)', rotation=270, labelpad=15)
-    
-    def _plot_single_track_line(self, ax, track, colors, alpha=1.0, linewidth=2.0):
-        """Plot a single storm track line with category-based coloring"""
-        lons, lats = track['lons'], track['lats']
-        categories = track['categories']
-        
-        # Plot track segments with different colors based on category
-        for i in range(len(lons) - 1):
-            cat = int(categories[i]) if not np.isnan(categories[i]) and categories[i] > 0 else 0
-            
-            # Determine color based on category
-            if cat == 0:
-                color = colors['TD']  # Tropical Depression/Storm
-            elif cat == 1:
-                color = colors['H1']
-            elif cat == 2:
-                color = colors['H2']
-            elif cat == 3:
-                color = colors['H3']
-            elif cat == 4:
-                color = colors['H4']
-            elif cat >= 5:
-                color = colors['H5']
-            else:
-                color = colors['TS']
-            
-            # Plot line segment
-            ax.plot([lons[i], lons[i+1]], [lats[i], lats[i+1]], 
-                   color=color, linewidth=linewidth, alpha=alpha, solid_capstyle='round')
+        # Plot the track line
+        ax.plot(track['lons'], track['lats'], 
+               color=color, linewidth=linewidth, alpha=alpha, zorder=zorder,
+               transform=ccrs.PlateCarree())
     
     def _add_gulf_coast_features(self, ax):
         """Add comprehensive geographical features with visible landmasses, state borders, and Caribbean"""
@@ -1456,6 +1594,309 @@ class NativeVisualizationEngine:
         
         # Connect events
         canvas.mpl_connect('button_press_event', on_click)
+        canvas.mpl_connect('scroll_event', on_scroll)
+    
+    def _add_cartopy_background(self, ax):
+        """Add comprehensive geographical background using Cartopy Natural Earth features with transparent fills"""
+        
+        # Add land masses with white outline only (no fill) - very thin lines for subtle appearance
+        land = cfeature.NaturalEarthFeature(
+            category='physical',
+            name='land',
+            scale='50m',  # Medium resolution for good detail without being too slow
+            facecolor='none',  # Transparent fill - only outlines
+            edgecolor='white',    # White coastline outline
+            linewidth=0.5,  # Very thin for subtle geographic context
+            alpha=0.5,
+            zorder=1
+        )
+        ax.add_feature(land)
+        
+        # Add ocean background (transparent)
+        ocean = cfeature.NaturalEarthFeature(
+            category='physical',
+            name='ocean',
+            scale='50m',
+            facecolor='none',  # Transparent fill
+            edgecolor='none',
+            zorder=0
+        )
+        ax.add_feature(ocean)
+        
+        # Add coastline with thin lines for subtle geographic reference
+        coastline = cfeature.NaturalEarthFeature(
+            category='physical',
+            name='coastline',
+            scale='50m',
+            facecolor='none',
+            edgecolor='white',
+            linewidth=0.7,  # Thin for subtle appearance
+            alpha=0.5,
+            zorder=2
+        )
+        ax.add_feature(coastline)
+        
+        # Add major lakes and rivers for geographical context (transparent fill) - extremely thin
+        lakes = cfeature.NaturalEarthFeature(
+            category='physical',
+            name='lakes',
+            scale='50m',
+            facecolor='none',  # Transparent fill - only outlines
+            edgecolor='white',
+            linewidth=0.4,  # Extremely thin for very subtle appearance
+            alpha=0.4,
+            zorder=1
+        )
+        ax.add_feature(lakes)
+        
+        # Add state/province boundaries for US states (extremely subtle)
+        states = cfeature.NaturalEarthFeature(
+            category='cultural',
+            name='admin_1_states_provinces_lines',
+            scale='50m',
+            facecolor='none',
+            edgecolor='#e2e8f0',  # Very light gray
+            linewidth=0.3,  # Extremely thin
+            alpha=0.3,  # Very transparent
+            zorder=1
+        )
+        ax.add_feature(states)
+        
+        # Add country boundaries (extremely subtle)
+        countries = cfeature.NaturalEarthFeature(
+            category='cultural',
+            name='admin_0_countries',
+            scale='50m',
+            facecolor='none',
+            edgecolor='#cbd5e0',  # Light gray
+            linewidth=0.4,  # Very thin
+            alpha=0.25,  # Very transparent
+            zorder=1
+        )
+        ax.add_feature(countries)
+        
+        print("🗺️  Added Cartopy geographical background with transparent fills - outlines only")
+    
+    def _set_cartopy_boundaries(self, ax, data: pd.DataFrame):
+        """Set appropriate map boundaries for Gulf Coast region using Cartopy.
+
+        This method calculates boundaries that fill the available widget space
+        while maintaining proper geographic aspect ratio to prevent warping.
+        """
+        if data.empty:
+            # Default Gulf Coast view with some Caribbean context
+            ax.set_extent([-105, -75, 18, 35], crs=ccrs.PlateCarree())
+        else:
+            # Calculate boundaries based on data
+            lon_min, lon_max = data['long'].min(), data['long'].max()
+            lat_min, lat_max = data['lat'].min(), data['lat'].max()
+
+            lon_range = max(lon_max - lon_min, 1e-6)
+            lat_range = max(lat_max - lat_min, 1e-6)
+
+            # Base paddings (generous to show context)
+            lon_padding = max(lon_range * 0.3, 5)  # At least 5 degrees
+            lat_padding = max(lat_range * 0.3, 3)  # At least 3 degrees
+
+            # Smart boundary expansion that maintains geographic aspect ratio
+            # while filling as much of the widget as possible
+            try:
+                fig = ax.figure
+                fig_w, fig_h = fig.get_size_inches()
+                if fig_w > 0 and fig_h > 0:
+                    widget_aspect = fig_h / fig_w  # Height / Width of the figure
+                    
+                    # Calculate data extent with base padding
+                    data_lon_span = lon_range + 2 * lon_padding
+                    data_lat_span = lat_range + 2 * lat_padding
+                    
+                    # For PlateCarree projection at mid-latitudes, maintain roughly equal aspect
+                    # Expand the extent to fill widget while keeping proper proportions
+                    data_aspect = data_lat_span / data_lon_span
+                    
+                    if widget_aspect > data_aspect:
+                        # Widget is taller - expand latitude proportionally
+                        target_lat_span = data_lon_span * widget_aspect * 0.85  # 85% fill factor
+                        extra_lat = max(0, target_lat_span - data_lat_span)
+                        # Add extra padding asymmetrically (more to south for Gulf context)
+                        lat_padding_lower = lat_padding + (extra_lat * 0.6)
+                        lat_padding_upper = lat_padding + (extra_lat * 0.4)
+                        lon_padding_left = lon_padding
+                        lon_padding_right = lon_padding
+                    else:
+                        # Widget is wider - expand longitude proportionally  
+                        target_lon_span = data_lat_span / widget_aspect * 0.85  # 85% fill factor
+                        extra_lon = max(0, target_lon_span - data_lon_span)
+                        # Add extra longitude padding symmetrically
+                        lon_padding_left = lon_padding + (extra_lon / 2.0)
+                        lon_padding_right = lon_padding + (extra_lon / 2.0)
+                        lat_padding_lower = lat_padding
+                        lat_padding_upper = lat_padding
+            except Exception:
+                # Fallback to symmetric padding
+                lon_padding_left = lon_padding
+                lon_padding_right = lon_padding
+                lat_padding_lower = lat_padding
+                lat_padding_upper = lat_padding
+
+            # Calculate final extents with smart padding
+            try:
+                extent_lon_min = lon_min - lon_padding_left
+                extent_lon_max = lon_max + lon_padding_right
+                extent_lat_min = lat_min - lat_padding_lower
+                extent_lat_max = lat_max + lat_padding_upper
+            except NameError:
+                # Fallback to symmetric padding
+                extent_lon_min = lon_min - lon_padding
+                extent_lon_max = lon_max + lon_padding
+                extent_lat_min = lat_min - lat_padding
+                extent_lat_max = lat_max + lat_padding
+
+            ax.set_extent([extent_lon_min, extent_lon_max, extent_lat_min, extent_lat_max],
+                          crs=ccrs.PlateCarree())
+
+        print(f"📐 Set map extent: {ax.get_extent(crs=ccrs.PlateCarree())}")
+    
+    def _style_cartopy_map(self, ax, data: pd.DataFrame):
+        """Apply styling optimized for Cartopy map display with dark background"""
+        # Keep dark background colors (don't override with transparent)
+        # Background was already set in generate_map_visualization
+        
+        # Style the plot area
+        ax.spines['geo'].set_visible(False)  # Hide the default Cartopy border
+        
+        # Add gridlines for latitude/longitude reference with lighter color for dark background
+        gl = ax.gridlines(draw_labels=True, alpha=0.4, color='#808080', 
+                         linestyle='--', linewidth=0.5, zorder=3)
+        
+        # Configure gridline labels
+        gl.top_labels = False
+        gl.right_labels = False
+        gl.xlabel_style = {'size': 9, 'color': 'white' if self.theme else 'black'}
+        gl.ylabel_style = {'size': 9, 'color': 'white' if self.theme else 'black'}
+        
+        # Set title
+        storm_count = len(data.groupby(['name', 'year'])) if not data.empty else 0
+        ax.set_title(f'Gulf Coast Hurricane Tracks - {storm_count} Storms', 
+                    fontsize=14, fontweight='bold', pad=15, 
+                    color='white' if self.theme else 'black')
+    
+    def _add_cartopy_interactivity(self, ax, canvas, track_data: Dict):
+        """Add interactive features optimized for Cartopy map including pan and zoom"""
+        
+        # Store pan state
+        pan_state = {'active': False, 'start_x': None, 'start_y': None, 'extent': None}
+        
+        def on_mouse_press(event):
+            """Handle mouse button press for panning"""
+            if event.inaxes != ax:
+                return
+            
+            if event.button == 1:  # Left mouse button
+                # Start panning
+                pan_state['active'] = True
+                pan_state['start_x'] = event.xdata
+                pan_state['start_y'] = event.ydata
+                pan_state['extent'] = ax.get_extent(crs=ccrs.PlateCarree())
+        
+        def on_mouse_move(event):
+            """Handle mouse movement for panning"""
+            if not pan_state['active'] or event.inaxes != ax:
+                return
+            
+            if event.xdata is None or event.ydata is None:
+                return
+            
+            # Calculate drag distance
+            dx = pan_state['start_x'] - event.xdata
+            dy = pan_state['start_y'] - event.ydata
+            
+            # Apply pan to extent
+            lon_min, lon_max, lat_min, lat_max = pan_state['extent']
+            new_extent = [lon_min + dx, lon_max + dx, lat_min + dy, lat_max + dy]
+            
+            ax.set_extent(new_extent, crs=ccrs.PlateCarree())
+            canvas.draw_idle()
+        
+        def on_mouse_release(event):
+            """Handle mouse button release"""
+            if event.button == 1:  # Left mouse button
+                if pan_state['active']:
+                    # End panning
+                    pan_state['active'] = False
+                    pan_state['start_x'] = None
+                    pan_state['start_y'] = None
+                    pan_state['extent'] = None
+                else:
+                    # If wasn't panning, treat as click for storm info
+                    on_click(event)
+        
+        def on_click(event):
+            """Handle mouse clicks for storm information"""
+            if event.inaxes != ax or not track_data:
+                return
+            
+            click_lon, click_lat = event.xdata, event.ydata
+            if click_lon is None or click_lat is None:
+                return
+            
+            # Find nearest storm track
+            min_dist = float('inf')
+            nearest_storm = None
+            
+            for storm_key, track in track_data.items():
+                for lon, lat in zip(track['lons'], track['lats']):
+                    dist = ((lon - click_lon) ** 2 + (lat - click_lat) ** 2) ** 0.5
+                    if dist < min_dist:
+                        min_dist = dist
+                        nearest_storm = track
+            
+            # Show storm info if click is close enough
+            if min_dist < 1.0 and nearest_storm:  # Within ~1 degree
+                info_text = f"Storm: {nearest_storm['name']}\nMax Wind: {nearest_storm['max_wind']} mph"
+                ax.annotate(info_text, (click_lon, click_lat),
+                           xytext=(10, 10), textcoords='offset points',
+                           bbox=dict(boxstyle='round,pad=0.5', facecolor='yellow', alpha=0.9),
+                           fontsize=10, fontweight='bold')
+                canvas.draw_idle()
+        
+        def on_scroll(event):
+            """Handle mouse wheel for zooming (Cartopy-optimized)"""
+            if event.inaxes != ax:
+                return
+            
+            # Get current extent
+            current_extent = ax.get_extent(crs=ccrs.PlateCarree())
+            lon_min, lon_max, lat_min, lat_max = current_extent
+            
+            scale_factor = 1.1 if event.button == 'up' else 0.9
+            
+            # Zoom centered on mouse position if available, otherwise on center
+            if event.xdata is not None and event.ydata is not None:
+                center_lon = event.xdata
+                center_lat = event.ydata
+            else:
+                center_lon = (lon_min + lon_max) / 2
+                center_lat = (lat_min + lat_max) / 2
+            
+            # Calculate new extent around the center point
+            lon_range = (lon_max - lon_min) * scale_factor / 2
+            lat_range = (lat_max - lat_min) * scale_factor / 2
+            
+            new_lon_min = center_lon - lon_range
+            new_lon_max = center_lon + lon_range
+            new_lat_min = center_lat - lat_range
+            new_lat_max = center_lat + lat_range
+            
+            # Apply new extent
+            ax.set_extent([new_lon_min, new_lon_max, new_lat_min, new_lat_max], 
+                         crs=ccrs.PlateCarree())
+            canvas.draw_idle()
+        
+        # Connect events for pan and zoom
+        canvas.mpl_connect('button_press_event', on_mouse_press)
+        canvas.mpl_connect('motion_notify_event', on_mouse_move)
+        canvas.mpl_connect('button_release_event', on_mouse_release)
         canvas.mpl_connect('scroll_event', on_scroll)
     
     def generate_analysis_visualization(self, data: pd.DataFrame, 
