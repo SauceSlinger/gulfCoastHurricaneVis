@@ -41,11 +41,17 @@ COPY . .
 # Create directory for database (if needed later)
 RUN mkdir -p /app/database
 
-# Set permissions
-RUN chmod +x launch_with_loading.py
+# Ensure Python files are executable
+RUN chmod +x launch_with_loading.py || true
+
+# Verify installation
+RUN python3 -c "import sys; print(f'Python {sys.version}')" && \
+    python3 -c "import customtkinter; print('✅ CustomTkinter installed')" && \
+    python3 -c "import matplotlib; print('✅ Matplotlib installed')" && \
+    python3 -c "import cartopy; print('✅ Cartopy installed')"
 
 # Expose port for potential web interface (future enhancement)
 EXPOSE 8050
 
 # Default command to run the application
-CMD ["python", "launch_with_loading.py"]
+CMD ["python3", "launch_with_loading.py"]
