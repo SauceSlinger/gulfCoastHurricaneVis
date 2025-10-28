@@ -49,7 +49,7 @@ jobs:
       uses: docker/build-push-action@v4
       with:
         context: .
-        push: false
+        load: true
         tags: gulf-coast-hurricane-vis:test
         cache-from: type=gha
         cache-to: type=gha,mode=max
