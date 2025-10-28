@@ -91,9 +91,8 @@ class TabbedNativeDashboard:
         if self.log_callback:
             try:
                 self.log_callback(message)
-            except (Exception, tk.TclError) as e:
-                # Silently ignore if loading window is closed
-                pass
+            except Exception as e:
+                print(f"⚠️ Log callback error: {e}")
     
     def _setup_logging(self):
         """Setup logging for the dashboard"""
@@ -1856,11 +1855,12 @@ class TabbedNativeDashboard:
                 self.root.after(0, lambda: self.update_map_visualization_with_callback())  
                 self.root.after(0, lambda: self.update_analysis_visualization_with_callback())
                 
-            except Exception as e:
-                self.root.after(0, lambda: self.performance_label.configure(
-                    text=f"❌ Update failed: {e}"
+            except Exception as ex:
+                error_msg = str(ex)
+                self.root.after(0, lambda msg=error_msg: self.performance_label.configure(
+                    text=f"❌ Update failed: {msg}"
                 ))
-                print(f"❌ Visualization update error: {e}")
+                print(f"❌ Visualization update error: {ex}")
         
         threading.Thread(target=update_thread, daemon=True).start()
     
@@ -1891,9 +1891,10 @@ class TabbedNativeDashboard:
                     text=f"✅ Loaded {len(self.storm_data)} hurricane records"
                 ))
                 
-            except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror(
-                    "Data Loading Error", f"Failed to load data: {e}"
+            except Exception as ex:
+                error_msg = str(ex)
+                self.root.after(0, lambda msg=error_msg: messagebox.showerror(
+                    "Data Loading Error", f"Failed to load data: {msg}"
                 ))
                 self.root.after(0, lambda: self.performance_label.configure(
                     text="❌ Failed to load data"

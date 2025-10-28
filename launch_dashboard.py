@@ -1,13 +1,11 @@
-#!/usr/bin/env python3#!/usr/bin/env python3
+#!/usr/bin/env python3
 
-""""""
+"""
+Hurricane Dashboard - Professional Launcher
 
-Hurricane Dashboard - Professional LauncherEnhanced Hurricane Dashboard Launcher
-
-Complete launcher with professional loading interface and fallback optionsEnsures database setup and optimal performance before launching the dashboard
-
-""""""
-
+Complete launcher with professional loading interface and fallback options.
+Ensures database setup and optimal performance before launching the dashboard.
+"""
 
 
 import sysimport os

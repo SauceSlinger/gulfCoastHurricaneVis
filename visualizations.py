@@ -740,7 +740,7 @@ class HurricaneVisualizations:
                             f"<b>🌟 HIGHLIGHTED: {track['name']} ({track['year']})</b><br>"
                             f"Max Category: {track.get('category', 'N/A')}<br>"
                             f"Max Wind: {track.get('max_wind', 0):.0f} mph<br>"
-                            f"<i>Lat: %{lat:.2f}°, Lon: %{lon:.2f}°</i>"
+                            "<i>Position tracked</i>"
                             "<extra></extra>"
                         ),
                         showlegend=True

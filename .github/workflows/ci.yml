@@ -33,26 +33,18 @@ jobs:
       run: |
         pip install flake8
         # Stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exclude=deprecated,__pycache__,.venv,build,dist --select=E9,F63,F7,F82 --show-source --statistics
         # Exit-zero treats all errors as warnings
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        flake8 . --count --exclude=deprecated,__pycache__,.venv,build,dist --exit-zero --max-complexity=10 --max-line-length=127 --statistics
       continue-on-error: true
     
     - name: Test data loading
       run: |
         python -c "import pandas as pd; df = pd.read_csv('storms.csv'); print(f'✅ Loaded {len(df)} records')"
     
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-    
     - name: Build Docker image
-      uses: docker/build-push-action@v4
-      with:
-        context: .
-        load: true
-        tags: gulf-coast-hurricane-vis:test
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      run: |
+        docker build -t gulf-coast-hurricane-vis:test .
     
     - name: Test Docker image
       run: |

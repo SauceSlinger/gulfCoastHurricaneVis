@@ -597,15 +597,15 @@ class NativeVisualizationEngine:
                verticalalignment='top', bbox=dict(boxstyle="round,pad=0.5", 
                facecolor='white', alpha=0.8))
         
-        # Store references
-        self.active_figures[plot_type] = fig
-        self.active_canvases[plot_type] = canvas
-        self.active_toolbars[plot_type] = toolbar
+        # Store references (if needed for tracking)
+        # self.active_figures[plot_type] = fig
+        # self.active_canvases[plot_type] = canvas
+        # self.active_toolbars[plot_type] = toolbar
         
-        # Configure canvas for performance
-        canvas.mpl_connect('draw_event', self._on_canvas_draw)
+        # Configure canvas for performance (if event tracking needed)
+        # canvas.mpl_connect('draw_event', self._on_canvas_draw)
         
-        return fig, canvas
+        return {'canvas': canvas, 'figure': fig}
     
     def generate_timeline_visualization(self, data: pd.DataFrame, 
                                       parent_frame, selected_storms: List[str] = None) -> Dict[str, Any]:
