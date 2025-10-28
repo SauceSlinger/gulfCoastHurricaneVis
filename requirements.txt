@@ -1,6 +1,6 @@
 # Core GUI and Application Framework
 customtkinter>=5.2.0
-tkinter  # Usually comes with Python
+# tkinter - System package, install via: apt-get install python3-tk
 
 # Data Processing and Analysis
 pandas>=2.0.0
@@ -19,6 +19,7 @@ python-dotenv>=1.0.0
 geopandas>=0.13.0
 folium>=0.15.0
 shapely>=2.0.0
+cartopy>=0.21.0
 
 # System Monitoring and Performance
 psutil>=5.9.0
