@@ -19,7 +19,7 @@ services:
     network_mode: host
     stdin_open: true
     tty: true
-    restart: unless-stopped
+    restart: "no"
 
   # Optional: PostgreSQL database for future use
   postgres:

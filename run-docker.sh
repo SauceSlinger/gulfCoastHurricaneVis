@@ -23,13 +23,27 @@ if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/
     exit 1
 fi
 
+# Detect if we need sudo for Docker
+DOCKER_CMD="docker"
+COMPOSE_CMD="docker-compose"
+if ! docker ps &> /dev/null; then
+    if sudo docker ps &> /dev/null 2>&1; then
+        echo "⚠️  Docker requires sudo (you may need to log out/in for group permissions)"
+        DOCKER_CMD="sudo docker"
+        COMPOSE_CMD="sudo docker-compose"
+    else
+        echo "❌ Cannot access Docker. Please check Docker installation."
+        exit 1
+    fi
+fi
+
 # Allow X11 connections from localhost (for GUI display)
 echo "🔧 Configuring X11 display access..."
 xhost +local:docker > /dev/null 2>&1 || true
 
 # Build the Docker image
 echo "🏗️  Building Docker image..."
-docker-compose build
+$COMPOSE_CMD build
 
 # Run the application
 echo "🚀 Starting Hurricane Dashboard..."
@@ -38,12 +52,8 @@ echo "📊 The dashboard will open in a new window."
 echo "   Press Ctrl+C to stop the application."
 echo ""
 
-# Use docker-compose or docker compose based on what's available
-if command -v docker-compose &> /dev/null; then
-    docker-compose up
-else
-    docker compose up
-fi
+# Use the appropriate compose command
+$COMPOSE_CMD up
 
 # Cleanup X11 permissions on exit
 echo ""
