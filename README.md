@@ -2,16 +2,28 @@
 
 A high-performance, beautiful customTkinter application for visualizing hurricane data with instant responsiveness through intelligent caching and PostgreSQL backend optimization.
 
-## 📥 Quick Install (Linux Mint/Ubuntu/Debian)
+## 📥 Download & Install
 
-**Download and install in one command:**
+### Linux (Ubuntu/Debian/Linux Mint)
 ```bash
 wget https://github.com/SauceSlinger/gulfCoastHurricaneVis/releases/download/v1.0.0/hurricane-vis-installer.run
 chmod +x hurricane-vis-installer.run
 ./hurricane-vis-installer.run
 ```
 
-Or download directly from [Releases](https://github.com/SauceSlinger/gulfCoastHurricaneVis/releases/latest)
+### Windows (10/11)
+1. Download: [hurricane-vis-windows-installer.zip](https://github.com/SauceSlinger/gulfCoastHurricaneVis/releases/download/v1.0.0/hurricane-vis-windows-installer.zip)
+2. Extract the ZIP file
+3. Double-click `install.bat`
+4. Follow installation prompts
+
+### macOS (Intel & Apple Silicon)
+1. Download: [hurricane-vis-macos-installer.zip](https://github.com/SauceSlinger/gulfCoastHurricaneVis/releases/download/v1.0.0/hurricane-vis-macos-installer.zip)
+2. Extract the ZIP file
+3. Double-click `install.sh`
+4. Follow installation prompts
+
+**Or download from**: [GitHub Releases](https://github.com/SauceSlinger/gulfCoastHurricaneVis/releases/latest)
 
 ## ✨ Features
 
